@@ -144,3 +144,6 @@ venv/
 
 # Portable cmake-clang-v1 pack pointer written by ensure-toolchain (machine-specific)
 /toolchain/
+
+# Overlay shard compile log
+overlay_cache.log
