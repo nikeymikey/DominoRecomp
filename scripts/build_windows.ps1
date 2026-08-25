@@ -9,7 +9,7 @@
       1. git submodule update --init --recursive
       2. psxrecomp_cli.py generate   -> builds the emitters if missing,
                                         prepares the disc, writes generated/
-      3. cmake configure + build     -> build-release\<Config>\Domino_Recompiled.exe
+      3. cmake configure + build     -> <BuildDir>\Domino_Recompiled.exe
 
     IMPORTANT - the runtime is built with clang, not MSVC. psxrecomp's runtime
     sources use GNU C extensions (designated-initializer ranges in sio.c,
@@ -47,8 +47,13 @@
 .PARAMETER SkipGenerate
     Skip step 2. Use for a plain rebuild when generated/ is already current.
 
+.PARAMETER BuildDir
+    Build directory (default build-release). Use a separate one for a debug
+    build, e.g. -BuildDir build-debug -Config RelWithDebInfo, so the tuned
+    Release build and its overlay cache are left alone.
+
 .PARAMETER Clean
-    Delete build-release before configuring. The script already wipes it
+    Delete the build directory before configuring. The script already wipes it
     automatically when the cached generator differs from the one in use.
 
 .PARAMETER KeepGoing
@@ -77,7 +82,8 @@ param(
     [switch]$Clean,
     [int]$KeepGoing = 0,
     [string]$LogFile = '',
-    [switch]$Msvc
+    [switch]$Msvc,
+    [string]$BuildDir = 'build-release'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -308,10 +314,10 @@ Fix it either way:
         if ($rc -ne 0) { throw "generate failed ($rc) - full output in $log" }
     }
 
-    $buildDir = 'build-release'
+    $buildDir = $BuildDir
 
     if ($Clean) {
-        Dim 'removing build-release (-Clean)'
+        Dim "removing $buildDir (-Clean)"
         Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
     }
 
@@ -326,7 +332,7 @@ Fix it either way:
 
         $cached = Get-CachedGenerator $buildDir
         if ($cached -and $cached -ne $gen) {
-            Dim "build-release was configured with '$cached'; removing it for '$gen'"
+            Dim "$buildDir was configured with '$cached'; removing it for '$gen'"
             Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
         }
 
@@ -354,7 +360,7 @@ Fix it either way:
         # A build dir configured with cl.exe cannot be reused for clang.
         $cachedCC = Get-CachedCompiler $buildDir
         if ($cachedCC -and $cachedCC -notmatch 'clang') {
-            Dim "build-release was configured with '$cachedCC'; removing it for clang"
+            Dim "$buildDir was configured with '$cachedCC'; removing it for clang"
             Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
         }
 
@@ -402,10 +408,10 @@ Fix it either way:
         if ($rc -ne 0) { throw "cmake build failed ($rc) - full output in $log" }
     }
 
-    $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+    $exe = Get-ChildItem -Path $buildDir -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     Write-Host ''
     if ($exe) { Write-Host "Built: $($exe.FullName)" -ForegroundColor Green }
-    else { Write-Host 'Build reported success; look under build-release\ for the exe.' -ForegroundColor Green }
+    else { Write-Host "Build reported success; look under $buildDir\ for the exe." -ForegroundColor Green }
 }
 finally {
     Pop-Location
