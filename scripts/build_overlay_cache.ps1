@@ -121,8 +121,27 @@ try {
         }
         foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $Gcc = $c; break } }
     }
-    if (-not $Gcc) { throw 'No shard compiler found. Pass -Gcc <path to gcc.exe or clang.exe>.' }
+    if (-not $Gcc) { throw 'No shard compiler found. Pass -Gcc <path to gcc.exe>.' }
     Dim "compiler   : $Gcc"
+
+    # The cmake-clang-v1 pack ships a gcc.exe that is really clang. Clang makes
+    # "redeclaration cannot add 'dllexport' attribute" a HARD error, and the
+    # generated overlay C defines overlay_flush_cycles() with dllexport after
+    # psx_cycles.h has already declared it without - legal for GCC (warning at
+    # most), fatal for clang, and not suppressible by any -W flag. Detect it and
+    # say so plainly rather than emitting hundreds of identical errors.
+    $ver = ''
+    try { $ver = (& $Gcc --version 2>&1 | Select-Object -First 1) } catch { }
+    if ($ver) { Dim "version    : $ver" }
+    if ($ver -match 'clang') {
+        Warn 'That compiler is clang, not GCC. Overlay shards CANNOT be built with clang:'
+        Warn '  psx_cycles.h declares overlay_flush_cycles() without dllexport, the'
+        Warn '  generated overlay C defines it with dllexport, and clang treats that'
+        Warn '  redeclaration as a hard error (GCC only warns).'
+        Warn 'Install a real MinGW-w64 GCC and pass it, e.g.:'
+        Warn '  -Gcc C:\mingw64\bin\gcc.exe    (WinLibs standalone: https://winlibs.com/)'
+        throw 'Refusing to run: clang cannot compile overlay shards.'
+    }
 
     if ($Jobs -le 0) { $Jobs = [Math]::Max(1, [Environment]::ProcessorCount - 2) }
     Dim "jobs       : $Jobs"
