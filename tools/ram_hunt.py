@@ -239,6 +239,59 @@ def cmd_changed(args):
         print(f"  ... {len(hits) - args.limit} more")
 
 
+PHYS = 0x1FFFFFFF
+
+
+def cmd_trace(args):
+    """Trace writes to specific addresses, with the guest PC that made them.
+
+    wtrace_add takes up to 8 ranges (WTRACE_MAX_RANGES); wtrace_arm is just an
+    alias for it, so adding a range starts tracing - there is no separate arm
+    step. Entries carry addr/old/new plus ra, func, pc, cpu_pc, sp, a0-a3 and
+    frame, which is what identifies the code that owns a variable.
+    """
+    d = Debug(port=args.port)
+    if args.action == "off":
+        d.call("wtrace_range", lo="0x0", hi="0x0")     # lo==hi clears all slots
+        print("write tracing off")
+        return
+
+    if args.action == "add":
+        if not args.addrs:
+            sys.exit("trace add needs at least one address")
+        d.call("wtrace_range", lo="0x0", hi="0x0")     # clear existing slots
+        for a in args.addrs:
+            rsp = d.call("wtrace_add", lo=f"0x{a:08X}", hi=f"0x{a + args.width:08X}")
+            print(f"  slot {rsp['slot']}: {rsp['lo']}..{rsp['hi']}")
+        d.call("wtrace_clear")
+        print("ring cleared - now play through a stage transition, then: trace dump")
+        return
+
+    # dump
+    params = {"count": args.count}
+    if args.newest:
+        params["newest"] = 1
+    rsp = d.call("wtrace_dump", **params)
+    entries = rsp.get("entries", [])
+    print(f"total writes seen: {rsp.get('total')}, ring holds {rsp.get('available')}, "
+          f"showing {len(entries)}")
+    if not entries:
+        print("  (nothing - was a range added, and did the value actually change?)")
+        return
+    print(f"\n  {'frame':>7}  {'addr':>10}  {'old':>10} -> {'new':<10} "
+          f"{'pc':>10}  {'ra':>10}  {'func':>10}")
+    for e in entries:
+        print(f"  {e.get('frame',''):>7}  {e['addr']:>10}  {e['old']:>10} -> {e['new']:<10} "
+              f"{e.get('pc',''):>10}  {e.get('ra',''):>10}  {e.get('func',''):>10}")
+
+    seen = {}
+    for e in entries:
+        seen.setdefault(e['addr'], set()).add(e.get('pc', '?'))
+    print("\n  writers per address:")
+    for addr, pcs in sorted(seen.items()):
+        print(f"    {addr}: {len(pcs)} distinct PC(s) -> {', '.join(sorted(pcs)[:6])}")
+
+
 def cmd_ping(args):
     d = Debug(port=args.port)
     rsp = d.ping()
@@ -326,6 +379,14 @@ def main():
     g.add_argument("--limit", type=int, default=40)
     g.add_argument("--same", action="store_true", help="list unchanged instead")
     g.set_defaults(func=cmd_changed)
+
+    t = sub.add_parser("trace", help="trace writes to addresses and report the writing PC")
+    t.add_argument("action", choices=["add", "dump", "off"])
+    t.add_argument("addrs", nargs="*", type=auto_int)
+    t.add_argument("--width", type=auto_int, default=4, help="bytes per traced range")
+    t.add_argument("--count", type=int, default=64)
+    t.add_argument("--newest", action="store_true")
+    t.set_defaults(func=cmd_trace)
 
     n = sub.add_parser("ping", help="check the debug server is listening")
     n.set_defaults(func=cmd_ping)
