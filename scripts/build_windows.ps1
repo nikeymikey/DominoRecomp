@@ -46,6 +46,15 @@
     Delete build-release before configuring. The script already wipes it
     automatically when the cached generator differs from the one in use.
 
+.PARAMETER KeepGoing
+    Ninja -k value: keep building through this many failures instead of
+    stopping at the first. Use -KeepGoing 10 when diagnosing, so one run
+    shows the whole pattern of errors. Ignored for Visual Studio generators.
+
+.PARAMETER LogFile
+    Where to tee generate/build output. Default build.log in the repo root
+    (gitignored). Everything still prints to the console as well.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
 
@@ -60,7 +69,9 @@ param(
     [string]$Config = 'Release',
     [string]$Generator = '',
     [switch]$SkipGenerate,
-    [switch]$Clean
+    [switch]$Clean,
+    [int]$KeepGoing = 0,
+    [string]$LogFile = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -180,8 +191,12 @@ function Get-CachedGenerator($buildDir) {
     return $null
 }
 
+$log = if ($LogFile) { $LogFile } else { Join-Path $Root 'build.log' }
+Remove-Item $log -ErrorAction SilentlyContinue
+
 Push-Location $Root
 try {
+    Write-Host "Logging generate/build output to $log" -ForegroundColor DarkGray
     Write-Host 'Preparing toolchain...' -ForegroundColor Cyan
     Initialize-BuildEnvironment
     Set-Location $Root   # Enter-VsDevShell can move us; pin it back.
@@ -224,8 +239,8 @@ Fix it either way:
                      '--config', 'game.toml', '--project-root', '.')
         if ($Disc) { $genArgs += @('--disc', $Disc) }
         if ($Bios) { $genArgs += @('--bios', $Bios) }
-        & $python @genArgs
-        if ($LASTEXITCODE -ne 0) { throw "generate failed ($LASTEXITCODE)" }
+        & $python @genArgs 2>&1 | Tee-Object -FilePath $log -Append
+        if ($LASTEXITCODE -ne 0) { throw "generate failed ($LASTEXITCODE) - full output in $log" }
     }
 
     $gen = if ($Generator) { $Generator } else { Resolve-Generator }
@@ -255,9 +270,15 @@ Fix it either way:
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
 
     $buildArgs = @('--build', $buildDir, '--target', 'psx-runtime')
-    if ($gen -like 'Visual Studio*') { $buildArgs += @('--config', $Config) }
-    & cmake @buildArgs
-    if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE)" }
+    if ($gen -like 'Visual Studio*') {
+        $buildArgs += @('--config', $Config)
+    }
+    elseif ($KeepGoing -gt 0) {
+        # Everything after -- goes to the underlying tool (ninja).
+        $buildArgs += @('--', '-k', "$KeepGoing")
+    }
+    & cmake @buildArgs 2>&1 | Tee-Object -FilePath $log -Append
+    if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE) - full output in $log" }
 
     $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     Write-Host ''
