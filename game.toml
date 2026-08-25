@@ -38,6 +38,13 @@ memcard_dir = "saves"
 [video]
 renderer = "opengl"
 aspect_ratio = "4:3"
+# Force the software frame pacer to own timing (59.94 Hz) instead of handing
+# cadence to driver vsync. main.cpp lets vsync own the cadence whenever SDL
+# reports the panel as ~60 Hz, and then skips its own pacer entirely - so if
+# SDL misreports the refresh rate (common on TVs and VRR/high-refresh panels)
+# the simulation advances at the real swap rate. On this LG 4K TV that ran the
+# game roughly 2x too fast; "off" fixed it with no other change.
+vsync = "off"
 
 [controller]
 default_mode = "digital"
