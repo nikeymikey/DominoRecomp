@@ -267,6 +267,25 @@ def cmd_trace(args):
         print("ring cleared - now play through a stage transition, then: trace dump")
         return
 
+    if args.action == "bootdump":
+        # PSX_WTRACE_BOOT retains the FIRST writes to a range from guest
+        # instruction zero, which is the only way to see an initialiser that
+        # runs before you can attach. Set the env var before launching:
+        #   $env:PSX_WTRACE_BOOT='0x000B2D98,0x000B2D9C'
+        rsp = d.call("wtrace_boot_dump", count=args.count)
+        entries = rsp.get("entries", [])
+        print(f"boot trace: total {rsp.get('total')}, stored {rsp.get('stored')}, "
+              f"showing {len(entries)}")
+        if not entries:
+            print("  (empty - was PSX_WTRACE_BOOT set before launch, in THIS shell?)")
+            return
+        print(f"\n  {'seq':>5}  {'frame':>7}  {'addr':>10}  {'old':>10} -> {'new':<10} "
+              f"{'pc':>10}  {'ra':>10}")
+        for e in entries:
+            print(f"  {e.get('seq',''):>5}  {e.get('frame',''):>7}  {e['addr']:>10}  "
+                  f"{e['old']:>10} -> {e['new']:<10} {e.get('pc',''):>10}  {e.get('ra',''):>10}")
+        return
+
     # dump
     params = {"count": args.count}
     if args.newest:
@@ -381,7 +400,7 @@ def main():
     g.set_defaults(func=cmd_changed)
 
     t = sub.add_parser("trace", help="trace writes to addresses and report the writing PC")
-    t.add_argument("action", choices=["add", "dump", "off"])
+    t.add_argument("action", choices=["add", "dump", "bootdump", "off"])
     t.add_argument("addrs", nargs="*", type=auto_int)
     t.add_argument("--width", type=auto_int, default=4, help="bytes per traced range")
     t.add_argument("--count", type=int, default=64)
