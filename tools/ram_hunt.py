@@ -251,6 +251,22 @@ def cmd_trace(args):
     frame, which is what identifies the code that owns a variable.
     """
     d = Debug(port=args.port)
+
+    if getattr(args, "wait", 0):
+        # Arm as early as the process allows: poll ping until the server is up.
+        # Start this BEFORE launching the game, so the range is registered the
+        # instant the debug server binds - earlier than any human can type.
+        deadline = time.time() + args.wait
+        while True:
+            try:
+                d.ping()
+                break
+            except (ConnectionRefusedError, OSError):
+                if time.time() > deadline:
+                    sys.exit(f"debug server did not appear within {args.wait}s")
+                time.sleep(0.05)
+        print("server up - arming immediately")
+
     if args.action == "off":
         d.call("wtrace_range", lo="0x0", hi="0x0")     # lo==hi clears all slots
         print("write tracing off")
@@ -405,6 +421,10 @@ def main():
     t.add_argument("--width", type=auto_int, default=4, help="bytes per traced range")
     t.add_argument("--count", type=int, default=64)
     t.add_argument("--newest", action="store_true")
+    t.add_argument("--wait", type=float, default=0,
+                   help="poll for up to N seconds until the debug server is up, "
+                        "then arm at once. Run this BEFORE launching the game to "
+                        "catch writes that happen during startup.")
     t.set_defaults(func=cmd_trace)
 
     n = sub.add_parser("ping", help="check the debug server is listening")
