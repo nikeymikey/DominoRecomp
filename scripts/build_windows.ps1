@@ -11,11 +11,16 @@
                                         prepares the disc, writes generated/
       3. cmake configure + build     -> build-release\<Config>\Domino_Recompiled.exe
 
-    Visual Studio ships CMake and Ninja, but only puts them on PATH inside a
-    developer shell. This script locates your VS install with vswhere, adds the
-    bundled CMake/Ninja to PATH for this session, and imports the MSVC x64
-    environment - so it works from a plain PowerShell window too. A separately
-    installed CMake (winget / cmake.org) already on PATH is used as-is.
+    IMPORTANT - the runtime is built with clang, not MSVC. psxrecomp's runtime
+    sources use GNU C extensions (designated-initializer ranges in sio.c,
+    __attribute__ in mdec.c) that cl.exe cannot parse, so step 3 drives
+    psxrecomp_cli.py, which fetches and activates the portable cmake-clang-v1
+    pack - the same toolchain upstream CI and RetComM use. Pass -Msvc to try
+    cl.exe anyway; it is expected to fail with C2059/C2143/C2146.
+
+    Visual Studio ships CMake and Ninja but only puts them on PATH inside a
+    developer shell, so this script also locates your VS install with vswhere
+    and exposes them - that is what step 2's emitter build uses.
 
     Python 3 and Git must be on PATH.
 
@@ -71,7 +76,8 @@ param(
     [switch]$SkipGenerate,
     [switch]$Clean,
     [int]$KeepGoing = 0,
-    [string]$LogFile = ''
+    [string]$LogFile = '',
+    [switch]$Msvc
 )
 
 $ErrorActionPreference = 'Stop'
@@ -191,6 +197,14 @@ function Get-CachedGenerator($buildDir) {
     return $null
 }
 
+function Get-CachedCompiler($buildDir) {
+    $cache = Join-Path $buildDir 'CMakeCache.txt'
+    if (-not (Test-Path $cache)) { return $null }
+    $m = Select-String -Path $cache -Pattern '^CMAKE_C_COMPILER:(?:FILE)?PATH=(.*)$' | Select-Object -First 1
+    if ($m) { return $m.Matches[0].Groups[1].Value.Trim() }
+    return $null
+}
+
 $log = if ($LogFile) { $LogFile } else { Join-Path $Root 'build.log' }
 Remove-Item $log -ErrorAction SilentlyContinue
 
@@ -201,7 +215,9 @@ try {
     Initialize-BuildEnvironment
     Set-Location $Root   # Enter-VsDevShell can move us; pin it back.
 
-    if (-not (Have 'cmake')) {
+    # The default path drives psxrecomp_cli.py, which activates the portable
+    # clang pack itself, so cmake on PATH is only required for -Msvc.
+    if ($Msvc -and -not (Have 'cmake')) {
         throw @'
 cmake not found on PATH, and it is not in your Visual Studio install either.
 
@@ -220,11 +236,10 @@ Fix it either way:
     }
     if (-not $python) { throw 'Python 3 not found on PATH. Install it and reopen your shell.' }
 
-    Dim "cmake  : $((Get-Command cmake).Source)"
+    if (Have 'cmake') { Dim "cmake  : $((Get-Command cmake).Source)" }
     Dim "python : $((Get-Command $python).Source)"
     if (Have 'ninja') { Dim "ninja  : $((Get-Command ninja).Source)" }
     else { Warn 'ninja not found - the emitter build falls back to NMake Makefiles (slower).' }
-    if (-not (Have 'cl')) { Warn 'cl.exe not found - CMake may not find MSVC.' }
 
     Step 1 'Syncing submodules (psxrecomp, recomp-ui, recomp-net)'
     & git submodule update --init --recursive
@@ -243,42 +258,65 @@ Fix it either way:
         if ($LASTEXITCODE -ne 0) { throw "generate failed ($LASTEXITCODE) - full output in $log" }
     }
 
-    $gen = if ($Generator) { $Generator } else { Resolve-Generator }
     $buildDir = 'build-release'
 
-    Step 3 "Configuring and building the runtime ($Config, $gen)"
-
-    # A build dir configured with a different generator cannot be reused, and
-    # CMake fails confusingly rather than recovering. Wipe it instead.
-    $cached = Get-CachedGenerator $buildDir
-    if ($Clean -or ($cached -and $cached -ne $gen)) {
-        if ($cached -and $cached -ne $gen) {
-            Dim "build-release was configured with '$cached'; removing it for '$gen'"
-        }
+    if ($Clean) {
+        Dim 'removing build-release (-Clean)'
         Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
     }
 
-    $cfgArgs = @('-S', '.', '-B', $buildDir, '-G', $gen)
-    if ($gen -like 'Visual Studio*') {
-        # Multi-config: build type is chosen at build time via --config.
-        $cfgArgs += @('-A', 'x64')
+    if ($Msvc) {
+        # ---- Unsupported escape hatch -------------------------------------
+        # The runtime sources use GNU C extensions (designated-initializer
+        # ranges in sio.c, __attribute__ in mdec.c) that MSVC cannot parse.
+        # Kept only for experimenting; expect C2059/C2143/C2146.
+        Warn 'The -Msvc path is known to fail: the runtime uses GNU C extensions cl.exe rejects.'
+        $gen = if ($Generator) { $Generator } else { Resolve-Generator }
+        Step 3 "Configuring and building with MSVC ($Config, $gen)"
+
+        $cached = Get-CachedGenerator $buildDir
+        if ($cached -and $cached -ne $gen) {
+            Dim "build-release was configured with '$cached'; removing it for '$gen'"
+            Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
+        }
+
+        $cfgArgs = @('-S', '.', '-B', $buildDir, '-G', $gen)
+        if ($gen -like 'Visual Studio*') { $cfgArgs += @('-A', 'x64') }
+        else { $cfgArgs += "-DCMAKE_BUILD_TYPE=$Config" }
+        & cmake @cfgArgs 2>&1 | Tee-Object -FilePath $log -Append
+        if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE) - full output in $log" }
+
+        $buildArgs = @('--build', $buildDir, '--target', 'psx-runtime')
+        if ($gen -like 'Visual Studio*') { $buildArgs += @('--config', $Config) }
+        elseif ($KeepGoing -gt 0) { $buildArgs += @('--', '-k', "$KeepGoing") }
+        & cmake @buildArgs 2>&1 | Tee-Object -FilePath $log -Append
+        if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE) - full output in $log" }
     }
     else {
-        $cfgArgs += "-DCMAKE_BUILD_TYPE=$Config"
-    }
-    & cmake @cfgArgs
-    if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
+        # ---- Supported path: the project's own clang toolchain -------------
+        # psxrecomp_cli.py resolves the portable cmake-clang-v1 pack, puts its
+        # cmake/ninja/clang on PATH, and configures with them. This is what
+        # upstream CI and RetComM use; MSVC cannot compile this codebase.
+        Step 3 "Fetching the portable clang toolchain (cmake-clang-v1)"
+        & $python 'psxrecomp\psxrecomp_cli.py' 'ensure-toolchain' '--project-root' '.' 2>&1 |
+            Tee-Object -FilePath $log -Append
+        if ($LASTEXITCODE -ne 0) { throw "ensure-toolchain failed ($LASTEXITCODE) - full output in $log" }
 
-    $buildArgs = @('--build', $buildDir, '--target', 'psx-runtime')
-    if ($gen -like 'Visual Studio*') {
-        $buildArgs += @('--config', $Config)
+        # A build dir configured with cl.exe cannot be reused for clang.
+        $cachedCC = Get-CachedCompiler $buildDir
+        if ($cachedCC -and $cachedCC -notmatch 'clang') {
+            Dim "build-release was configured with '$cachedCC'; removing it for clang"
+            Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
+        }
+
+        Step 3 "Configuring and building the runtime ($Config, clang + Ninja)"
+        $rbArgs = @('psxrecomp\psxrecomp_cli.py', 'rebuild',
+                    '--config', 'game.toml', '--project-root', '.',
+                    '--build-dir', $buildDir, '--target', 'psx-runtime',
+                    '--exe-basename', 'Domino_Recompiled', '--no-pgo')
+        & $python @rbArgs 2>&1 | Tee-Object -FilePath $log -Append
+        if ($LASTEXITCODE -ne 0) { throw "rebuild failed ($LASTEXITCODE) - full output in $log" }
     }
-    elseif ($KeepGoing -gt 0) {
-        # Everything after -- goes to the underlying tool (ninja).
-        $buildArgs += @('--', '-k', "$KeepGoing")
-    }
-    & cmake @buildArgs 2>&1 | Tee-Object -FilePath $log -Append
-    if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE) - full output in $log" }
 
     $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     Write-Host ''

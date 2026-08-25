@@ -72,8 +72,17 @@ powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
 ```
 
 That wrapper does submodule sync → `psxrecomp_cli.py generate` (which builds the
-emitters itself if they are missing) → `cmake` configure + build, and prints the
-path to `Domino_Recompiled.exe`. Useful flags:
+emitters itself if they are missing) → `psxrecomp_cli.py rebuild`, and prints the
+path to `Domino_Recompiled.exe`.
+
+> **The runtime is built with clang, not MSVC.** psxrecomp's runtime sources use
+> GNU C extensions — designated-initializer ranges (`[0 ... N] =`) in `sio.c`,
+> `__attribute__` in `mdec.c` — which `cl.exe` cannot parse (C2059/C2143/C2146).
+> Step 3 therefore uses the portable **cmake-clang-v1** pack that the CLI fetches
+> automatically, the same toolchain upstream CI and RetComM use. MSVC is still
+> needed for step 2's emitter build (C++20, no GNU extensions).
+
+Useful flags:
 
 | Flag | Effect |
 |------|--------|
@@ -81,6 +90,9 @@ path to `Domino_Recompiled.exe`. Useful flags:
 | `-Disc C:\path\game.cue` | Override the disc path from `game.toml` |
 | `-Config RelWithDebInfo` | Optimized build with symbols (never use Debug) |
 | `-SkipGenerate` | Rebuild only, when `generated/` is already current |
+| `-KeepGoing 10` | Pass `-k 10` to Ninja so one run surfaces many errors |
+| `-Clean` | Wipe `build-release` first |
+| `-Msvc` | Force cl.exe (unsupported; expected to fail) |
 
 Equivalent by hand:
 
