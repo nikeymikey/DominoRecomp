@@ -1,34 +1,37 @@
 # Stage Select for No One Can Stop Mr. Domino (SLUS-00804).
 #
-# How this was found, so the next person does not have to repeat it:
+# The stage counter at 0x800B2D98 is NOT initialised from a constant. It is
+# unpacked from the memory-card save block, after a checksum check:
 #
-#   0x800B2D98 is the stage counter, a HALFWORD (accessed with lh/sh).
-#   The stage-advance routine reads it, and either starts a new run at 1 or
-#   increments it:
+#   0x80030D4C ..            checksum loop over 0x800BCC0 .. +0x1FFC
+#   0x80030D94  bne   $v0, $a0, 0x80030eb0   ; mismatch -> no-save path
+#   0x80030DA0  addiu $a3, $a3, 0x3748       ; save block copied to 0x800B3748
+#   0x80030DA8 ..            memcpy loop
+#   0x80030DE4  lui   $v1, 0x800b
+#   0x80030DE8  lbu   $v1, 0x3748($v1)       ; stage byte from the save  <-- patched
+#   0x80030E40  sh    $v1, 0x2d98($at)       ; -> the stage counter
 #
-#     0x800130E0  lh    $v0, 0x2d98($v0)   ; current stage
-#     0x800130E8  bnez  $v0, 0x80013100    ; already playing -> advance
-#     0x800130F8  j     0x80013094
-#     0x800130FC  addiu $v0, $zero, 1      ; delay slot: FIRST stage = 1  <-- patched
-#     0x80013100  addiu $v0, $v1, 1        ; else stage = current + 1
-#     0x80013108  sh    $v0, 0x2d98($at)   ; store it back
+# $v1 is not touched between that load and that store, so replacing the load
+# with a constant sets the stage regardless of what the save holds.
 #
-#   Patching the immediate at 0x800130FC changes which stage a new game starts
-#   on. The guard covers the whole instruction (01 00 02 24 = addiu $v0,$zero,1)
-#   and the option owns only its low halfword, which is where the MIPS immediate
-#   lives - the same shape as the starting-lives example in
-#   psxrecomp/docs/MOD_PACKAGES.md.
+# An earlier attempt patched 0x800130FC (the "first stage = 1" branch of the
+# stage-ADVANCE routine). That branch only runs when the counter is already
+# zero, which never happens once a save exists, so it had no effect even though
+# the patch was verifiably live in RAM.
 #
-#   Verified live before writing this: with the debug build's TCP server,
-#   `write_ram 0x800B2D98 = 3` then finishing a stage advanced the game to
-#   stage 4.
+# The option is a choice rather than a bounded integer because each value needs
+# a different opcode, not a different immediate inside one instruction:
+# replace_from can only substitute a field within the guarded bytes.
+#
+# Known limit: this patches the checksum-OK path. With no valid save the game
+# branches to 0x80030EB0 instead and this patch is bypassed.
 
-format_version = 2
+format_version = 1
 id = "domino.stage-select"
 version = "1.0.0"
 name = "Stage Select"
 author = "DominoRecomp"
-description = "Start a new game on any stage instead of always the first."
+description = "Start on any stage by overriding the stage byte unpacked from the save."
 license = "MIT"
 resolver = "declarative"
 
@@ -38,7 +41,7 @@ game_id = "SLUS-00804"
 [[feature]]
 id = "stage-select"
 name = "Stage Select"
-description = "Begin a new game on the chosen stage. Progression continues normally from there."
+description = "Force the starting stage, ignoring the stage recorded in your save."
 group = "Quality of Life"
 default_enabled = false
 
@@ -46,17 +49,77 @@ default_enabled = false
 feature = "stage-select"
 id = "stage"
 label = "Starting stage"
-description = "Which stage a new game begins on, in the game's own order. 1 is the normal start."
+description = "Stage numbers follow the game's own order. 1 is stock behaviour."
 group = "Quality of Life"
-type = "integer"
-min = 1
-max = 6
-step = 1
-default = 1
+type = "choice"
+default = "1"
+
+[[option.choice]]
+feature = "stage-select"
+value = "1"
+label = "Stage 1"
+
+[[option.choice]]
+feature = "stage-select"
+value = "2"
+label = "Stage 2"
+
+[[option.choice]]
+feature = "stage-select"
+value = "3"
+label = "Stage 3"
+
+[[option.choice]]
+feature = "stage-select"
+value = "4"
+label = "Stage 4"
+
+[[option.choice]]
+feature = "stage-select"
+value = "5"
+label = "Stage 5"
+
+[[option.choice]]
+feature = "stage-select"
+value = "6"
+label = "Stage 6"
 
 [[patch]]
 feature = "stage-select"
 target = "main_exe"
-address = 0x800130FC
-expected = "01 00 02 24"
-replace_from = { option = "stage", encoding = "u16le", offset = 0 }
+address = 0x80030DE8
+expected = "48 37 63 90"
+replace = "02 00 03 24"
+when = { stage = "2" }
+
+[[patch]]
+feature = "stage-select"
+target = "main_exe"
+address = 0x80030DE8
+expected = "48 37 63 90"
+replace = "03 00 03 24"
+when = { stage = "3" }
+
+[[patch]]
+feature = "stage-select"
+target = "main_exe"
+address = 0x80030DE8
+expected = "48 37 63 90"
+replace = "04 00 03 24"
+when = { stage = "4" }
+
+[[patch]]
+feature = "stage-select"
+target = "main_exe"
+address = 0x80030DE8
+expected = "48 37 63 90"
+replace = "05 00 03 24"
+when = { stage = "5" }
+
+[[patch]]
+feature = "stage-select"
+target = "main_exe"
+address = 0x80030DE8
+expected = "48 37 63 90"
+replace = "06 00 03 24"
+when = { stage = "6" }
