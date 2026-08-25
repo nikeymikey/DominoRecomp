@@ -11,10 +11,13 @@
                                         prepares the disc, writes generated/
       3. cmake configure + build     -> build-release\<Config>\Domino_Recompiled.exe
 
-    Run this from a "x64 Native Tools Command Prompt for VS 2022" (or any shell
-    where cl.exe is on PATH) so CMake finds MSVC. Python 3 and CMake >= 3.20
-    must also be on PATH. Ninja is strongly recommended - the emitter build
-    prefers it and falls back to NMake Makefiles without it.
+    Visual Studio ships CMake and Ninja, but only puts them on PATH inside a
+    developer shell. This script locates your VS install with vswhere, adds the
+    bundled CMake/Ninja to PATH for this session, and imports the MSVC x64
+    environment - so it works from a plain PowerShell window too. A separately
+    installed CMake (winget / cmake.org) already on PATH is used as-is.
+
+    Python 3 and Git must be on PATH.
 
     The disc is NOT copied into this repo. game.toml points at it by relative
     path (..\No One Can Stop Mr. Domino (USA)\...cue); pass -Disc to override.
@@ -32,7 +35,7 @@
 
 .PARAMETER Generator
     CMake generator for the runtime. Default "Visual Studio 17 2022".
-    Use "Ninja" if you prefer, from a VS developer prompt.
+    Use "Ninja" if you prefer.
 
 .PARAMETER SkipGenerate
     Skip step 2. Use for a plain rebuild when generated/ is already current.
@@ -57,33 +60,115 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Root = Split-Path -Parent $PSScriptRoot
-Push-Location $Root
 
 function Step($n, $msg) { Write-Host "`n[$n/3] $msg" -ForegroundColor Cyan }
-function Need($exe, $hint) {
-    if (-not (Get-Command $exe -ErrorAction SilentlyContinue)) {
-        throw "$exe not found on PATH. $hint"
+function Dim($msg) { Write-Host "  $msg" -ForegroundColor DarkGray }
+function Warn($msg) { Write-Host "  $msg" -ForegroundColor Yellow }
+function Have($exe) { [bool](Get-Command $exe -ErrorAction SilentlyContinue) }
+
+function Get-VsInstallPath {
+    # ProgramFiles(x86) is where the shared VS Installer lives on x64 Windows,
+    # but guard for it being absent rather than letting Join-Path throw.
+    $pf86 = ${env:ProgramFiles(x86)}
+    if (-not $pf86) { $pf86 = $env:ProgramFiles }
+    if (-not $pf86) { return $null }
+
+    $vswhere = Join-Path $pf86 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path $vswhere)) { return $null }
+
+    try {
+        $found = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath 2>$null
+        if (-not $found) {
+            $found = & $vswhere -latest -products * -property installationPath 2>$null
+        }
+        if ($found) { return ([string[]]$found)[0] }
+    }
+    catch {
+        Warn "vswhere failed: $($_.Exception.Message)"
+    }
+    return $null
+}
+
+function Add-ToPath($dir) {
+    if ((Test-Path $dir) -and ($env:PATH -notlike "*$dir*")) {
+        $env:PATH = "$dir;$env:PATH"
+        Dim "PATH += $dir"
+        return $true
+    }
+    return $false
+}
+
+function Initialize-BuildEnvironment {
+    # Nothing to do if a real toolchain is already exposed.
+    if ((Have 'cmake') -and (Have 'cl')) { return }
+
+    $vs = Get-VsInstallPath
+    if (-not $vs) {
+        Warn 'vswhere could not find a Visual Studio install.'
+        return
+    }
+    Dim "Visual Studio: $vs"
+
+    # VS bundles CMake and Ninja under CommonExtensions; expose them here.
+    if (-not (Have 'cmake')) {
+        [void](Add-ToPath (Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin'))
+    }
+    if (-not (Have 'ninja')) {
+        [void](Add-ToPath (Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja'))
+    }
+
+    # Import the MSVC x64 environment (cl.exe, INCLUDE, LIB) if not active.
+    if (-not (Have 'cl')) {
+        $dll = Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll'
+        if (Test-Path $dll) {
+            try {
+                Import-Module $dll -ErrorAction Stop
+                Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation `
+                    -DevCmdArguments '-arch=x64 -host_arch=x64' | Out-Null
+                Dim 'MSVC x64 environment loaded'
+            }
+            catch {
+                Warn "could not load the MSVC environment: $($_.Exception.Message)"
+            }
+        }
+        else {
+            Warn 'Microsoft.VisualStudio.DevShell.dll not found; cl.exe may be unavailable.'
+        }
     }
 }
 
+Push-Location $Root
 try {
-    Need 'cmake'  'Install CMake 3.20+ and reopen your shell.'
-    Need 'git'    'Install Git for Windows.'
+    Write-Host 'Preparing toolchain...' -ForegroundColor Cyan
+    Initialize-BuildEnvironment
+    Set-Location $Root   # Enter-VsDevShell can move us; pin it back.
+
+    if (-not (Have 'cmake')) {
+        throw @'
+cmake not found on PATH, and it is not in your Visual Studio install either.
+
+Fix it either way:
+  * Visual Studio Installer -> Modify -> Individual components ->
+    tick "C++ CMake tools for Windows", then rerun this script.
+  * or install it standalone:  winget install Kitware.CMake
+    then CLOSE AND REOPEN this terminal so PATH refreshes.
+'@
+    }
+    if (-not (Have 'git')) { throw 'git not found on PATH. Install Git for Windows.' }
 
     $python = $null
     foreach ($c in @('python', 'python3', 'py')) {
-        if (Get-Command $c -ErrorAction SilentlyContinue) { $python = $c; break }
+        if (Have $c) { $python = $c; break }
     }
     if (-not $python) { throw 'Python 3 not found on PATH. Install it and reopen your shell.' }
 
-    if (-not (Get-Command 'ninja' -ErrorAction SilentlyContinue)) {
-        Write-Host 'note: ninja is not on PATH. The emitter build will fall back to' -ForegroundColor Yellow
-        Write-Host '      NMake Makefiles, which is slower. winget install Ninja-build.Ninja' -ForegroundColor Yellow
-    }
-    if (-not (Get-Command 'cl' -ErrorAction SilentlyContinue)) {
-        Write-Host 'note: cl.exe is not on PATH. Run this from a "x64 Native Tools' -ForegroundColor Yellow
-        Write-Host '      Command Prompt for VS 2022" so CMake can find MSVC.' -ForegroundColor Yellow
-    }
+    Dim "cmake  : $((Get-Command cmake).Source)"
+    Dim "python : $((Get-Command $python).Source)"
+    if (Have 'ninja') { Dim "ninja  : $((Get-Command ninja).Source)" }
+    else { Warn 'ninja not found - the emitter build falls back to NMake Makefiles (slower).' }
+    if (-not (Have 'cl')) { Warn 'cl.exe not found - CMake may not find MSVC.' }
 
     Step 1 'Syncing submodules (psxrecomp, recomp-ui, recomp-net)'
     & git submodule update --init --recursive
@@ -114,12 +199,8 @@ try {
 
     $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
     Write-Host ''
-    if ($exe) {
-        Write-Host "Built: $($exe.FullName)" -ForegroundColor Green
-    }
-    else {
-        Write-Host 'Build reported success; look under build-release\ for the exe.' -ForegroundColor Green
-    }
+    if ($exe) { Write-Host "Built: $($exe.FullName)" -ForegroundColor Green }
+    else { Write-Host 'Build reported success; look under build-release\ for the exe.' -ForegroundColor Green }
 }
 finally {
     Pop-Location
