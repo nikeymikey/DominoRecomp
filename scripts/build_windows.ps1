@@ -34,11 +34,17 @@
     enormous and compiles unusably slowly unoptimized.
 
 .PARAMETER Generator
-    CMake generator for the runtime. Default "Visual Studio 17 2022".
-    Use "Ninja" if you prefer.
+    CMake generator for the runtime. Default is auto: Ninja when available
+    (fastest for the huge generated C, and no toolset-version coupling),
+    otherwise the newest "Visual Studio NN YYYY" generator your CMake offers.
+    Pass a name explicitly to override.
 
 .PARAMETER SkipGenerate
     Skip step 2. Use for a plain rebuild when generated/ is already current.
+
+.PARAMETER Clean
+    Delete build-release before configuring. The script already wipes it
+    automatically when the cached generator differs from the one in use.
 
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
@@ -52,8 +58,9 @@ param(
     [string]$Bios = '',
     [ValidateSet('Release', 'RelWithDebInfo')]
     [string]$Config = 'Release',
-    [string]$Generator = 'Visual Studio 17 2022',
-    [switch]$SkipGenerate
+    [string]$Generator = '',
+    [switch]$SkipGenerate,
+    [switch]$Clean
 )
 
 $ErrorActionPreference = 'Stop'
@@ -139,6 +146,40 @@ function Initialize-BuildEnvironment {
     }
 }
 
+function Resolve-Generator {
+    # Ninja first: it has no platform-toolset coupling, so it does not care
+    # which Visual Studio generation is installed, and it parallelises the
+    # very large generated C far better than MSBuild.
+    if (Have 'ninja') { return 'Ninja' }
+
+    # Otherwise ask CMake what Visual Studio generators it actually offers and
+    # take the newest, rather than hardcoding a year that may not be installed.
+    try {
+        $names = & cmake --help 2>$null |
+            Select-String -Pattern 'Visual Studio (\d+) (\d+)' |
+            ForEach-Object { $_.Matches[0].Value } |
+            Sort-Object -Unique
+        if ($names) {
+            $newest = $names |
+                Sort-Object { [int]([regex]::Match($_, 'Visual Studio (\d+)').Groups[1].Value) } -Descending |
+                Select-Object -First 1
+            return $newest
+        }
+    }
+    catch {
+        Warn "could not read cmake --help: $($_.Exception.Message)"
+    }
+    throw 'No usable CMake generator found (no ninja, and cmake --help listed no Visual Studio generator).'
+}
+
+function Get-CachedGenerator($buildDir) {
+    $cache = Join-Path $buildDir 'CMakeCache.txt'
+    if (-not (Test-Path $cache)) { return $null }
+    $m = Select-String -Path $cache -Pattern '^CMAKE_GENERATOR:INTERNAL=(.*)$' | Select-Object -First 1
+    if ($m) { return $m.Matches[0].Groups[1].Value.Trim() }
+    return $null
+}
+
 Push-Location $Root
 try {
     Write-Host 'Preparing toolchain...' -ForegroundColor Cyan
@@ -187,14 +228,35 @@ Fix it either way:
         if ($LASTEXITCODE -ne 0) { throw "generate failed ($LASTEXITCODE)" }
     }
 
-    Step 3 "Configuring and building the runtime ($Config)"
-    $cfgArgs = @('-S', '.', '-B', 'build-release', '-G', $Generator)
-    if ($Generator -like 'Visual Studio*') { $cfgArgs += @('-A', 'x64') }
-    else { $cfgArgs += "-DCMAKE_BUILD_TYPE=$Config" }
+    $gen = if ($Generator) { $Generator } else { Resolve-Generator }
+    $buildDir = 'build-release'
+
+    Step 3 "Configuring and building the runtime ($Config, $gen)"
+
+    # A build dir configured with a different generator cannot be reused, and
+    # CMake fails confusingly rather than recovering. Wipe it instead.
+    $cached = Get-CachedGenerator $buildDir
+    if ($Clean -or ($cached -and $cached -ne $gen)) {
+        if ($cached -and $cached -ne $gen) {
+            Dim "build-release was configured with '$cached'; removing it for '$gen'"
+        }
+        Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
+    }
+
+    $cfgArgs = @('-S', '.', '-B', $buildDir, '-G', $gen)
+    if ($gen -like 'Visual Studio*') {
+        # Multi-config: build type is chosen at build time via --config.
+        $cfgArgs += @('-A', 'x64')
+    }
+    else {
+        $cfgArgs += "-DCMAKE_BUILD_TYPE=$Config"
+    }
     & cmake @cfgArgs
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
 
-    & cmake --build build-release --config $Config --target psx-runtime
+    $buildArgs = @('--build', $buildDir, '--target', 'psx-runtime')
+    if ($gen -like 'Visual Studio*') { $buildArgs += @('--config', $Config) }
+    & cmake @buildArgs
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE)" }
 
     $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
