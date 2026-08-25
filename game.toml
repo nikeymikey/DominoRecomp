@@ -34,6 +34,12 @@ strict = true
 [runtime]
 window_title = "No One Can Stop Mr. Domino"
 memcard_dir = "saves"
+# Record every overlay the game streams from disc (bytes + executed PCs) into
+# overlay_captures.json beside the exe, and let the runtime background-compile
+# uncached ones so the next visit runs native instead of interpreted.
+# Without this, all overlay code runs on the dirty-RAM interpreter forever:
+# the 55s title-screen session logged 9,667,149 interpreted instructions.
+overlay_cache = true
 
 [video]
 renderer = "opengl"
