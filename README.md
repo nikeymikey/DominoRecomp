@@ -1,11 +1,5 @@
 # No One Can Stop Mr. Domino — Recompiled
 
-<!-- retcomm-readme-metrics -->
-[![GitHub downloads (all assets, all releases)](https://img.shields.io/github/downloads/TechnicallyComputers/DominoRecomp/total)](https://github.com/TechnicallyComputers/DominoRecomp/releases)
-[![GitHub downloads (latest release)](https://img.shields.io/github/downloads/TechnicallyComputers/DominoRecomp/latest/total)](https://github.com/TechnicallyComputers/DominoRecomp/releases/latest)
-[![GitHub release](https://img.shields.io/github/v/release/TechnicallyComputers/DominoRecomp)](https://github.com/TechnicallyComputers/DominoRecomp/releases/latest)
-<!-- /retcomm-readme-metrics -->
-
 Static recompilation of **No One Can Stop Mr. Domino** (USA, `SLUS-00804`) built on
 [psxrecomp](https://github.com/mstan/psxrecomp) and
 [recomp-ui](https://github.com/mstan/recomp-ui).
@@ -22,6 +16,20 @@ Static recompilation of No One Can Stop Mr. Domino (USA) via PSXRecomp
 
 Scaffolded with the New Project Layout. See
 `psxrecomp/docs/GAME_PROJECT_SETUP.md` for the full flow.
+
+## Status
+
+Boots, runs at correct speed, all six stages covered by the overlay cache.
+
+| | |
+|---|---|
+| Interpreted instructions/frame, no cache | 2,405 |
+| ...with 437 native overlay shards | **77** (-97%) |
+
+You supply your own legal disc; nothing derived from it is in this repository.
+Build with `scripts\build_windows.ps1`, then grow the overlay cache by playing
+and running `scripts\build_overlay_cache.ps1`. Notes on the incomplete stage
+select are in [`docs/stage-select-findings.md`](docs/stage-select-findings.md).
 
 <!-- retcomm-readme-launcher -->
 ## RetComM Launcher

@@ -3,9 +3,13 @@
 Status: **unsolved**. `0x800B2D98` is not the variable a stage select needs.
 Recorded so the next attempt does not repeat this one.
 
+Addresses and conclusions are given; the game's own instructions are described
+rather than quoted.
+
 ## The counter at 0x800B2D98
 
-A **halfword** (`lh`/`sh`) holding the current stage number, 1-based.
+A **halfword** (accessed with `lh`/`sh`) holding the current stage number,
+1-based.
 
 Confirmed behaviour:
 
@@ -19,25 +23,22 @@ Confirmed behaviour:
 
 ## Code that touches it
 
-Stage-advance routine (main EXE):
+**Stage-advance routine**, main EXE, around `0x800130E0`-`0x80013118`. It loads
+the counter, branches on whether it is already non-zero, and either stores a
+literal 1 (the "first stage" path, at `0x800130FC`) or stores current+1 (at
+`0x80013108`). A companion field at `0x800B3FE0` is reset to `0xFFFF` two
+instructions after the counter store.
 
-    0x800130E0  lh    $v0, 0x2d98($v0)   ; current stage
-    0x800130E8  bnez  $v0, 0x80013100    ; nonzero -> advance
-    0x800130F8  j     0x80013094
-    0x800130FC  addiu $v0, $zero, 1      ; delay slot: "first stage = 1"
-    0x80013100  addiu $v0, $v1, 1        ; else current + 1
-    0x80013108  sh    $v0, 0x2d98($at)   ; store back
-    0x80013110  sh    $s0, 0x3fe0($at)   ; companion field -> 0xFFFF
+**Save-load routine**, main EXE, around `0x80030D4C`-`0x80030E40`. It:
 
-Save-load routine (main EXE) - the counter is unpacked from the memory-card
-save block, not initialised from a constant:
+1. checksums a block at `0x800BCC0` spanning `0x1FFC` bytes;
+2. branches away to `0x80030EB0` if the checksum does not match;
+3. copies the save block to `0x800B3748`;
+4. unpacks fields out of that block into globals - the stage byte is read from
+   `0x800B3748` at `0x80030DE8` and stored to the counter at `0x80030E40`.
 
-    0x80030D4C ..            checksum loop over 0x800BCC0 .. +0x1FFC
-    0x80030D94  bne   $v0, $a0, 0x80030eb0   ; checksum mismatch -> other path
-    0x80030DA0  addiu $a3, $a3, 0x3748       ; save block copied to 0x800B3748
-    0x80030DA8 ..            memcpy loop
-    0x80030DE8  lbu   $v1, 0x3748($v1)       ; stage byte out of the save
-    0x80030E40  sh    $v1, 0x2d98($at)       ; -> the counter
+So the counter is never initialised from a constant. It comes from the memory
+card save.
 
 Refresher writes seen at the title screen, both **overlay** addresses, both
 writing the value back unchanged: `0x800C2648` and `0x800C7268`.
@@ -46,8 +47,8 @@ writing the value back unchanged: `0x800C2648` and `0x800C7268`.
 
 | Target | Idea | Result |
 |---|---|---|
-| `0x800130FC` immediate | change "first stage = 1" | Patch verified live in RAM (`24020004`), no effect: that branch needs the counter to be zero, and with a save present it never is |
-| `0x800130DE8` load | replace the save's stage byte with a constant | No effect: the counter is not read by the stage-load path |
+| `0x800130FC` immediate | change the "first stage" literal | Patch verified live in RAM, no effect: that branch needs the counter to be zero, and with a save present it never is |
+| `0x80030DE8` load | replace the save's stage byte with a constant | No effect: the counter is not read by the stage-load path |
 
 Both were verified as applied. The failure was the premise, not the mechanism -
 `main_exe` patches work, and a patched range is routed onto the dirty-RAM
@@ -89,6 +90,9 @@ purposes. From a save state near the end of a stage:
 `tools/ram_hunt.py stage N` sets the counter to N-1 and verifies the read-back.
 Load the save state FIRST: restoring a state rewrites RAM and discards the poke.
 N must be 2..6; a counter of 0 takes the first-stage branch instead.
+
+This is how all six stages were covered for the overlay cache, taking the
+interpreter from 2,405 instructions per frame to 77.
 
 ## Cheap alternative
 
