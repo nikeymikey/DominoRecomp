@@ -1,4 +1,4 @@
-# Domino Recompiled
+# No One Can Stop Mr. Domino — Recompiled
 
 <!-- retcomm-readme-metrics -->
 [![GitHub downloads (all assets, all releases)](https://img.shields.io/github/downloads/TechnicallyComputers/DominoRecomp/total)](https://github.com/TechnicallyComputers/DominoRecomp/releases)
@@ -6,7 +6,7 @@
 [![GitHub release](https://img.shields.io/github/v/release/TechnicallyComputers/DominoRecomp)](https://github.com/TechnicallyComputers/DominoRecomp/releases/latest)
 <!-- /retcomm-readme-metrics -->
 
-Static recompilation of **Domino** built on
+Static recompilation of **No One Can Stop Mr. Domino** (USA, `SLUS-00804`) built on
 [psxrecomp](https://github.com/mstan/psxrecomp) and
 [recomp-ui](https://github.com/mstan/recomp-ui).
 
@@ -14,6 +14,7 @@ Static recompilation of No One Can Stop Mr. Domino (USA) via PSXRecomp
 
 | | |
 |---|---|
+| Serial | SLUS-00804 |
 | Players | 2 |
 | Region | NTSC-U |
 | Publisher | Acclaim Entertainment |
@@ -58,6 +59,41 @@ Default app icon: `assets/psxrecomp.ico` (and `.png` / `.svg`) — RetComM-theme
 Optional box art under `launcher_assets/img/` may come from
 [libretro-thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails)
 (`Named_Boxarts`); see `BOXART_SOURCE.txt` when present.
+
+## Quick start (Windows / MSVC)
+
+Prerequisites on `PATH`: **CMake 3.20+**, **Python 3**, **Git**, and ideally
+**Ninja** (`winget install Ninja-build.Ninja`) — the emitter build prefers it.
+Run from a **x64 Native Tools Command Prompt for VS 2022** so CMake finds MSVC.
+
+```powershell
+cd C:\psxrecomp_projects\DominoRecomp
+powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
+```
+
+That wrapper does submodule sync → `psxrecomp_cli.py generate` (which builds the
+emitters itself if they are missing) → `cmake` configure + build, and prints the
+path to `Domino_Recompiled.exe`. Useful flags:
+
+| Flag | Effect |
+|------|--------|
+| `-Bios C:\path\SCPH1001.BIN` | Generate the retail BIOS backend too (otherwise bundled OpenBIOS) |
+| `-Disc C:\path\game.cue` | Override the disc path from `game.toml` |
+| `-Config RelWithDebInfo` | Optimized build with symbols (never use Debug) |
+| `-SkipGenerate` | Rebuild only, when `generated/` is already current |
+
+Equivalent by hand:
+
+```powershell
+git submodule update --init --recursive
+python psxrecomp\psxrecomp_cli.py generate --config game.toml --project-root .
+cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64
+cmake --build build-release --config Release --target psx-runtime
+```
+
+`game.toml` points at the disc by **relative** path
+(`..\No One Can Stop Mr. Domino (USA)\...cue`), so the dump stays outside this
+repo and is never committed.
 
 ## Quick start (dev)
 
