@@ -9,8 +9,11 @@ build, not Release. Two commands matter here:
     {"id":1,"cmd":"mem_words","addr":"0x80010000","count":256}
     {"id":2,"cmd":"write_ram","addr":"0x80010000","val":"0x03"}
 
-mem_words reads at most 256 words (1 KiB) per request, so a full 2 MiB RAM
-sweep is chunked into ~2048 round-trips.
+read_ram serves up to the whole 2 MiB in a single hex-encoded response, so
+snapshots use it in 256 KiB chunks with a short pause between them. The server
+runs on the emulator's main thread with a 15 s per-response budget and drops
+clients that overrun it - hammering it with thousands of small mem_words
+requests gets the connection aborted mid-sweep.
 
 Typical workflow for a stage index
 ----------------------------------
@@ -47,13 +50,15 @@ HOST = "127.0.0.1"
 PORT = 4370
 RAM_BASE = 0x80000000
 RAM_SIZE = 2 * 1024 * 1024          # PS1 has 2 MiB of main RAM
-WORDS_PER_REQ = 256                 # server clamps to 256
+WORDS_PER_REQ = 256                 # mem_words clamps to 256
+CHUNK_BYTES = 256 * 1024            # per read_ram request
+CHUNK_DELAY = 0.05                  # let the emulator run between chunks
 
 
 class Debug:
     """One connection to the debug server, JSON object per line."""
 
-    def __init__(self, host=HOST, port=PORT, timeout=10.0):
+    def __init__(self, host=HOST, port=PORT, timeout=30.0):
         self.sock = socket.create_connection((host, port), timeout=timeout)
         self.f = self.sock.makefile("rwb")
         self.next_id = 1
@@ -76,21 +81,33 @@ class Debug:
         rsp = self.call("mem_words", addr=f"0x{addr:08X}", count=count)
         return [int(w, 16) for w in rsp["words"]]
 
-    def read_range(self, start, size, progress=True):
-        """Return `size` bytes from `start` as little-endian bytes."""
+    def read_bytes(self, addr, length):
+        """One read_ram request; returns raw bytes."""
+        rsp = self.call("read_ram", addr=f"0x{addr:08X}", len=length)
+        return bytes.fromhex(rsp["hex"])
+
+    def read_range(self, start, size, chunk=CHUNK_BYTES, delay=CHUNK_DELAY,
+                   progress=True):
+        """Return `size` bytes from `start`.
+
+        Uses read_ram, which serves up to the whole 2 MiB in one request. The
+        server is pumped on the emulator's main thread with a 15 s per-response
+        budget and drops clients that overrun it, so this deliberately does NOT
+        ask for everything at once, and sleeps briefly between chunks to let
+        frames run. (The original mem_words loop issued ~2048 requests for a
+        2 MiB sweep and got dropped with WinError 10053 partway through.)
+        """
         out = bytearray()
-        total = size // 4
-        done = 0
         t0 = time.time()
-        while done < total:
-            n = min(WORDS_PER_REQ, total - done)
-            for w in self.read_words(start + done * 4, n):
-                out += struct.pack("<I", w)
-            done += n
-            if progress and done % (WORDS_PER_REQ * 64) == 0:
-                pct = done * 100.0 / total
+        while len(out) < size:
+            n = min(chunk, size - len(out))
+            out += self.read_bytes(start + len(out), n)
+            if progress:
+                pct = len(out) * 100.0 / size
                 sys.stderr.write(f"\r  reading... {pct:5.1f}%")
                 sys.stderr.flush()
+            if delay and len(out) < size:
+                time.sleep(delay)
         if progress:
             sys.stderr.write(f"\r  read {size/1024:.0f} KiB in {time.time()-t0:.1f}s\n")
         return bytes(out)
@@ -130,7 +147,8 @@ def cmd_snapshot(args):
     d = Debug(port=args.port)
     try:
         print(f"snapshot '{args.name}': 0x{args.start:08X} +0x{args.size:X}")
-        data = d.read_range(args.start, args.size)
+        data = d.read_range(args.start, args.size,
+                            chunk=args.chunk, delay=args.delay)
     finally:
         d.close()
     with open(snap_path(args.name), "wb") as fh:
@@ -258,6 +276,10 @@ def main():
     s.add_argument("name")
     s.add_argument("--start", type=auto_int, default=RAM_BASE)
     s.add_argument("--size", type=auto_int, default=RAM_SIZE)
+    s.add_argument("--chunk", type=auto_int, default=CHUNK_BYTES,
+                   help="bytes per read_ram request (default 256 KiB)")
+    s.add_argument("--delay", type=float, default=CHUNK_DELAY,
+                   help="seconds to pause between chunks so frames keep running")
     s.set_defaults(func=cmd_snapshot)
 
     c = sub.add_parser("candidates", help="addresses matching NAME=VALUE in every snapshot")
