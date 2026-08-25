@@ -1,0 +1,143 @@
+# Scaffold .gitignore for a PSXRecomp game repository (New Project Layout).
+# Aligned with docs/ci/templates/game.gitignore.
+
+# Build outputs
+/build/
+/build-*/
+/out/
+/.happypath/
+
+# Setup-host: players Generate game C locally (CI clears generated/).
+/generated/
+
+# Release packaging
+/release-stage/
+/dist/
+*.zip
+
+# Local PlayStation assets (never commit dumps / BIOS)
+/bios/
+/isos/
+/saves/
+/prepared_disc/
+/disc/
+.settings/
+
+# Disc / image / memcard formats
+*.bin
+*.cue
+*.iso
+*.img
+*.sub
+*.ccd
+*.mcd
+*.mcr
+*.chd
+*.car
+SCPH*.BIN
+
+# Local path/config stubs
+bios.cfg
+disc.cfg
+rom.cfg
+settings.toml
+
+# Ghidra / local analysis
+/ghidra/projects/
+*.gpr
+*.rep/
+*.lock
+*.lock~
+
+# Editor / cache
+.vs/
+.vscode/
+*.user
+*.log
+.DS_Store
+__pycache__/
+CMakeCache.txt
+CMakeFiles/
+compile_commands.json
+
+# Runtime artifacts from psx-runtime launches
+psx_crash.txt
+psx_last_run_report.json
+psx_screenshot.bmp
+psx_freeze_heartbeat.json
+starvation_dump.jsonl
+
+# Diagnostic dumps (root-level) — keep catalog / probe trackable
+/*.json
+/*.bmp
+/*.png
+!/catalog_identity.json
+!/disc_probe.json
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Project hardening — copyrighted inputs and derived code must never be tracked.
+# The disc dump lives OUTSIDE this repo at
+#   ../No One Can Stop Mr. Domino (USA)/
+# game.toml points at it by relative path; nothing here should ever hold a copy.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Extracted PS-X executables (boot EXE + streamed overlays taken from the disc)
+SLUS_*
+SLES_*
+SLPS_*
+SLPM_*
+SCUS_*
+SCES_*
+SCPS_*
+PSX.EXE
+
+# Retail BIOS dumps, any casing or location
+*.BIN
+SCPH*.bin
+scph*.bin
+ps-x_bios*
+*.rom
+*.ROM
+
+# Disc images / dump sidecars — extra casings the base list misses
+*.CUE
+*.ISO
+*.CHD
+*.IMG
+*.pbp
+*.PBP
+*.ecm
+*.m3u
+*.toc
+*.cdi
+*.nrg
+
+# Recompiler output in any build-variant directory (derived from your dump)
+/generated*/
+overlay_captures.json
+*.overlay_captures.json
+/.aot_capture_history/
+/.local/
+.psxrecomp.env
+.env
+
+# MSVC / Visual Studio build detritus
+/out/
+/.vs/
+*.sln
+*.vcxproj
+*.vcxproj.*
+*.ilk
+*.pdb
+*.obj
+*.exp
+*.lib
+*.exe
+
+# Python tooling
+.venv/
+venv/
+*.pyc
+
+# Keep the tracked symbol header visible despite the *.exe / dump rules above
+!psx_symbols.h

@@ -1,0 +1,50 @@
+# Autofilled by tools/new_project_layout/probe_disc.py from your legal dump.
+# Review before shipping. Runtime quirks / overlay seeds still need hand work.
+
+[game]
+name = "No One Can Stop Mr. Domino"
+id = "SLUS-00804"
+players = 2
+exe = "disc/SLUS_008.04"
+disc = "../No One Can Stop Mr. Domino (USA)/No One Can Stop Mr. Domino (USA).cue"
+load_address = "0x80010000"
+entry_pc = "0x80047E64"
+text_size = "0x00095000"
+stack_base = "0x801FFFF0"
+
+# Digests are for data Track 01 (first BINARY FILE / TRACK 01).
+[prepare_disc]
+out_dir = "disc"
+bin_name = "No One Can Stop Mr. Domino (USA) (Track 1).bin"
+cue_name = "No One Can Stop Mr. Domino (USA).cue"
+boot_exe = "SLUS_008.04"
+known_sizes = [230959344]
+known_md5 = [
+  "430321edbfffcd5afe023776789bed0a",
+]
+known_sha1 = [
+  "34cb3806ff08fc014bcfe8bbadc915cd8d5a9258",
+]
+
+[recompiler]
+seeds = "seeds/ghidra_funcs.txt"
+out_dir = "generated"
+strict = true
+
+[runtime]
+window_title = "No One Can Stop Mr. Domino"
+memcard_dir = "saves"
+
+[video]
+renderer = "opengl"
+aspect_ratio = "4:3"
+
+[controller]
+default_mode = "digital"
+
+# Online mount gate: digests + track count + optional TOC fingerprint
+# (see docs/NETPLAY.md).
+[netplay]
+require_cue = true
+required_tracks = 2
+required_disc_fp = "09aad64c95aa9891a6a5bed1cfe4f712c96faca4e1e2419ae65baf39d1efaff6"
