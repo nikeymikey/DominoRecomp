@@ -208,6 +208,38 @@ function Get-CachedCompiler($buildDir) {
 $log = if ($LogFile) { $LogFile } else { Join-Path $Root 'build.log' }
 Remove-Item $log -ErrorAction SilentlyContinue
 
+function Invoke-Logged {
+    <#
+      Run a native command, tee stdout+stderr to $log, return its exit code.
+
+      Windows PowerShell 5.1 turns anything a native command writes to stderr
+      into an ErrorRecord, and with $ErrorActionPreference = 'Stop' that becomes
+      a terminating NativeCommandError - so a purely informational stderr line
+      ("Already on user PATH: ...") aborts the script even though the command
+      succeeded. Drop to 'Continue' for the call and stringify the merged stream
+      so nothing downstream can treat a log line as a failure. The exit code is
+      the only success signal we trust.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Exe,
+        [string[]]$Arguments = @()
+    )
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # Out-Host, not a bare pipeline: anything left in the output stream
+        # would be returned by this function alongside the exit code.
+        & $Exe @Arguments 2>&1 |
+            ForEach-Object { if ($_ -is [System.Management.Automation.ErrorRecord]) { "$_" } else { $_ } } |
+            Tee-Object -FilePath $log -Append |
+            Out-Host
+        return $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $prev
+    }
+}
+
 Push-Location $Root
 try {
     Write-Host "Logging generate/build output to $log" -ForegroundColor DarkGray
@@ -242,8 +274,8 @@ Fix it either way:
     else { Warn 'ninja not found - the emitter build falls back to NMake Makefiles (slower).' }
 
     Step 1 'Syncing submodules (psxrecomp, recomp-ui, recomp-net)'
-    & git submodule update --init --recursive
-    if ($LASTEXITCODE -ne 0) { throw "git submodule update failed ($LASTEXITCODE)" }
+    $rc = Invoke-Logged 'git' @('submodule', 'update', '--init', '--recursive')
+    if ($rc -ne 0) { throw "git submodule update failed ($rc) - full output in $log" }
 
     if ($SkipGenerate) {
         Step 2 'Skipping generate (-SkipGenerate)'
@@ -254,8 +286,8 @@ Fix it either way:
                      '--config', 'game.toml', '--project-root', '.')
         if ($Disc) { $genArgs += @('--disc', $Disc) }
         if ($Bios) { $genArgs += @('--bios', $Bios) }
-        & $python @genArgs 2>&1 | Tee-Object -FilePath $log -Append
-        if ($LASTEXITCODE -ne 0) { throw "generate failed ($LASTEXITCODE) - full output in $log" }
+        $rc = Invoke-Logged $python $genArgs
+        if ($rc -ne 0) { throw "generate failed ($rc) - full output in $log" }
     }
 
     $buildDir = 'build-release'
@@ -283,14 +315,14 @@ Fix it either way:
         $cfgArgs = @('-S', '.', '-B', $buildDir, '-G', $gen)
         if ($gen -like 'Visual Studio*') { $cfgArgs += @('-A', 'x64') }
         else { $cfgArgs += "-DCMAKE_BUILD_TYPE=$Config" }
-        & cmake @cfgArgs 2>&1 | Tee-Object -FilePath $log -Append
-        if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE) - full output in $log" }
+        $rc = Invoke-Logged 'cmake' $cfgArgs
+        if ($rc -ne 0) { throw "cmake configure failed ($rc) - full output in $log" }
 
         $buildArgs = @('--build', $buildDir, '--target', 'psx-runtime')
         if ($gen -like 'Visual Studio*') { $buildArgs += @('--config', $Config) }
         elseif ($KeepGoing -gt 0) { $buildArgs += @('--', '-k', "$KeepGoing") }
-        & cmake @buildArgs 2>&1 | Tee-Object -FilePath $log -Append
-        if ($LASTEXITCODE -ne 0) { throw "cmake build failed ($LASTEXITCODE) - full output in $log" }
+        $rc = Invoke-Logged 'cmake' $buildArgs
+        if ($rc -ne 0) { throw "cmake build failed ($rc) - full output in $log" }
     }
     else {
         # ---- Supported path: the project's own clang toolchain -------------
@@ -298,9 +330,8 @@ Fix it either way:
         # cmake/ninja/clang on PATH, and configures with them. This is what
         # upstream CI and RetComM use; MSVC cannot compile this codebase.
         Step 3 "Fetching the portable clang toolchain (cmake-clang-v1)"
-        & $python 'psxrecomp\psxrecomp_cli.py' 'ensure-toolchain' '--project-root' '.' 2>&1 |
-            Tee-Object -FilePath $log -Append
-        if ($LASTEXITCODE -ne 0) { throw "ensure-toolchain failed ($LASTEXITCODE) - full output in $log" }
+        $rc = Invoke-Logged $python @('psxrecomp\psxrecomp_cli.py', 'ensure-toolchain', '--project-root', '.')
+        if ($rc -ne 0) { throw "ensure-toolchain failed ($rc) - full output in $log" }
 
         # A build dir configured with cl.exe cannot be reused for clang.
         $cachedCC = Get-CachedCompiler $buildDir
@@ -314,8 +345,8 @@ Fix it either way:
                     '--config', 'game.toml', '--project-root', '.',
                     '--build-dir', $buildDir, '--target', 'psx-runtime',
                     '--exe-basename', 'Domino_Recompiled', '--no-pgo')
-        & $python @rbArgs 2>&1 | Tee-Object -FilePath $log -Append
-        if ($LASTEXITCODE -ne 0) { throw "rebuild failed ($LASTEXITCODE) - full output in $log" }
+        $rc = Invoke-Logged $python $rbArgs
+        if ($rc -ne 0) { throw "rebuild failed ($rc) - full output in $log" }
     }
 
     $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
