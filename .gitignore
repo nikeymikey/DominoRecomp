@@ -141,3 +141,6 @@ venv/
 
 # Keep the tracked symbol header visible despite the *.exe / dump rules above
 !psx_symbols.h
+
+# Portable cmake-clang-v1 pack pointer written by ensure-toolchain (machine-specific)
+/toolchain/

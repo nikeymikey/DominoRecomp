@@ -197,6 +197,24 @@ function Get-CachedGenerator($buildDir) {
     return $null
 }
 
+function Get-ToolchainBin {
+    <#
+      Locate the portable cmake-clang-v1 bin/. ensure-toolchain writes the
+      resolved path into toolchain\.psxrecomp-bin for the C host to read, so
+      prefer that; fall back to the shared per-user cache location.
+    #>
+    $stamp = Join-Path $Root 'toolchain\.psxrecomp-bin'
+    if (Test-Path $stamp) {
+        $p = (Get-Content $stamp -Raw).Trim()
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    if ($env:USERPROFILE) {
+        $cache = Join-Path $env:USERPROFILE '.local\share\retcomm\toolchains\cmake-clang-v1\latest\bin'
+        if (Test-Path $cache) { return $cache }
+    }
+    return $null
+}
+
 function Get-CachedCompiler($buildDir) {
     $cache = Join-Path $buildDir 'CMakeCache.txt'
     if (-not (Test-Path $cache)) { return $null }
@@ -340,13 +358,48 @@ Fix it either way:
             Remove-Item -Recurse -Force $buildDir -ErrorAction SilentlyContinue
         }
 
+        # We deliberately do NOT use "psxrecomp_cli.py rebuild" here. Its
+        # clamp_future_mtimes() helper calls
+        #     os.utime(p, (stamp, stamp), follow_symlinks=False)
+        # and Windows does not support follow_symlinks for utime, so the call
+        # raises NotImplementedError - which is a RuntimeError, not the OSError
+        # the surrounding except clause catches. Any single file with a future
+        # mtime therefore aborts rebuild on Windows. Configuring and building
+        # directly does the same work (with --no-pgo there is nothing else in
+        # that code path) and cannot hit the bug.
+        $tcBin = Get-ToolchainBin
+        if (-not $tcBin) { throw "Could not locate the cmake-clang-v1 toolchain bin - see $log" }
+        Dim "toolchain: $tcBin"
+        [void](Add-ToPath $tcBin)
+
+        $clang = Join-Path $tcBin 'clang.exe'
+        $clangxx = Join-Path $tcBin 'clang++.exe'
+        foreach ($t in @($clang, $clangxx)) {
+            if (-not (Test-Path $t)) { throw "Missing $t in the toolchain pack." }
+        }
+        $ninjaExe = Join-Path $tcBin 'ninja.exe'
+        $cmakeExe = Join-Path $tcBin 'cmake.exe'
+        if (-not (Test-Path $cmakeExe)) { $cmakeExe = 'cmake' }
+
         Step 3 "Configuring and building the runtime ($Config, clang + Ninja)"
-        $rbArgs = @('psxrecomp\psxrecomp_cli.py', 'rebuild',
-                    '--config', 'game.toml', '--project-root', '.',
-                    '--build-dir', $buildDir, '--target', 'psx-runtime',
-                    '--exe-basename', 'Domino_Recompiled', '--no-pgo')
-        $rc = Invoke-Logged $python $rbArgs
-        if ($rc -ne 0) { throw "rebuild failed ($rc) - full output in $log" }
+
+        # Mirrors psxrecomp_cli.py _cmake_configure / _cmake_build.
+        $cfgArgs = @('-S', '.', '-B', $buildDir, '-G', 'Ninja',
+                     "-DCMAKE_BUILD_TYPE=$Config",
+                     '-DPSX_PGO=',
+                     "-DCMAKE_C_COMPILER=$clang",
+                     "-DCMAKE_CXX_COMPILER=$clangxx",
+                     '-DBPE_FORCE_SETUP_HOST=OFF',
+                     '-DPSXRECOMP_ALLOW_NO_BIOS=OFF')
+        if (Test-Path $ninjaExe) { $cfgArgs += "-DCMAKE_MAKE_PROGRAM=$ninjaExe" }
+        $rc = Invoke-Logged $cmakeExe $cfgArgs
+        if ($rc -ne 0) { throw "cmake configure failed ($rc) - full output in $log" }
+
+        $jobs = [Environment]::ProcessorCount
+        $buildArgs = @('--build', $buildDir, '--parallel', "$jobs", '--target', 'psx-runtime')
+        if ($KeepGoing -gt 0) { $buildArgs += @('--', '-k', "$KeepGoing") }
+        $rc = Invoke-Logged $cmakeExe $buildArgs
+        if ($rc -ne 0) { throw "cmake build failed ($rc) - full output in $log" }
     }
 
     $exe = Get-ChildItem -Path 'build-release' -Filter 'Domino_Recompiled.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
