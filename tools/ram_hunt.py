@@ -6,14 +6,17 @@ The debug server (runtime/src/debug_server.c) speaks JSON-per-line on port 4370
 and is only compiled in when PSX_DEBUG_TOOLS is ON - i.e. a RelWithDebInfo
 build, not Release. Two commands matter here:
 
-    {"id":1,"cmd":"mem_words","addr":"0x80010000","count":256}
+    {"id":1,"cmd":"read_ram","addr":"0x80010000","len":262144}
     {"id":2,"cmd":"write_ram","addr":"0x80010000","val":"0x03"}
+
+The server serves exactly ONE command per TCP connection and then closes the
+socket, so each request here dials afresh.
 
 read_ram serves up to the whole 2 MiB in a single hex-encoded response, so
 snapshots use it in 256 KiB chunks with a short pause between them. The server
 runs on the emulator's main thread with a 15 s per-response budget and drops
 clients that overrun it - hammering it with thousands of small mem_words
-requests gets the connection aborted mid-sweep.
+requests wastes connections and main-thread time.
 
 Typical workflow for a stage index
 ----------------------------------
@@ -56,26 +59,48 @@ CHUNK_DELAY = 0.05                  # let the emulator run between chunks
 
 
 class Debug:
-    """One connection to the debug server, JSON object per line."""
+    """Client for the debug server.
+
+    IMPORTANT: the server is strictly ONE COMMAND PER CONNECTION. Its accept
+    loop in runtime/src/debug_server.c does accept -> recv_line -> reply ->
+    sock_close, unconditionally, every iteration; the source comment says so
+    outright ("The client is one-command-per-connection"). Holding a socket
+    open and sending a second request gets WinError 10053 on Windows, because
+    the peer already closed. So every call dials a fresh connection.
+    """
 
     def __init__(self, host=HOST, port=PORT, timeout=30.0):
-        self.sock = socket.create_connection((host, port), timeout=timeout)
-        self.f = self.sock.makefile("rwb")
+        self.host = host
+        self.port = port
+        self.timeout = timeout
         self.next_id = 1
 
     def call(self, cmd, **params):
         req = {"id": self.next_id, "cmd": cmd}
         req.update(params)
         self.next_id += 1
-        self.f.write((json.dumps(req) + "\n").encode())
-        self.f.flush()
-        line = self.f.readline()
+        sock = socket.create_connection((self.host, self.port),
+                                        timeout=self.timeout)
+        try:
+            f = sock.makefile("rwb")
+            f.write((json.dumps(req) + "\n").encode())
+            f.flush()
+            line = f.readline()
+        finally:
+            try:
+                sock.close()
+            except OSError:
+                pass
         if not line:
-            raise ConnectionError("debug server closed the connection")
+            raise ConnectionError(f"{cmd}: server closed without replying")
         rsp = json.loads(line.decode())
         if not rsp.get("ok"):
-            raise RuntimeError(f"{cmd} failed: {rsp.get('error')}")
+            raise RuntimeError(f"{cmd} failed: {rsp.get('error') or rsp.get('err')}")
         return rsp
+
+    def ping(self):
+        """Liveness check; served by the I/O thread even if the emu is wedged."""
+        return self.call("ping")
 
     def read_words(self, addr, count):
         rsp = self.call("mem_words", addr=f"0x{addr:08X}", count=count)
@@ -113,11 +138,7 @@ class Debug:
         return bytes(out)
 
     def close(self):
-        try:
-            self.f.close()
-            self.sock.close()
-        except OSError:
-            pass
+        pass   # nothing persistent to close: one connection per command
 
 
 def snap_path(name):
@@ -218,6 +239,12 @@ def cmd_changed(args):
         print(f"  ... {len(hits) - args.limit} more")
 
 
+def cmd_ping(args):
+    d = Debug(port=args.port)
+    rsp = d.ping()
+    print(f"server alive on port {args.port}: {rsp}")
+
+
 def cmd_peek(args):
     d = Debug(port=args.port)
     try:
@@ -299,6 +326,9 @@ def main():
     g.add_argument("--limit", type=int, default=40)
     g.add_argument("--same", action="store_true", help="list unchanged instead")
     g.set_defaults(func=cmd_changed)
+
+    n = sub.add_parser("ping", help="check the debug server is listening")
+    n.set_defaults(func=cmd_ping)
 
     p = sub.add_parser("peek", help="hex dump live memory")
     p.add_argument("addr", type=auto_int)
