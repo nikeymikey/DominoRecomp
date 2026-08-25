@@ -47,6 +47,19 @@ if(MSVC)
     target_compile_options(psx-runtime PRIVATE /bigobj)
 endif()
 
+# --- Stage this title's preloaded mod packages -----------------------------
+# runtime.cmake stages only the FRAMEWORK's builtin packages
+# (psxrecomp/mods/builtin) into <exe>/mods/. Nothing stages the title's own
+# mods/preloaded, despite its README saying build wiring does, so do it here.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded/packages")
+    add_custom_command(TARGET psx-runtime POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            "${CMAKE_CURRENT_SOURCE_DIR}/mods/preloaded/packages"
+            "$<TARGET_FILE_DIR:psx-runtime>/mods/packages"
+        COMMENT "Staging preloaded mod packages"
+        VERBATIM)
+endif()
+
 # Stage runtime configs next to the exe for direct build/ launches. Only copy
 # files that exist — never fail POST_BUILD when game_options.toml is absent.
 foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)

@@ -1,0 +1,62 @@
+# Stage Select for No One Can Stop Mr. Domino (SLUS-00804).
+#
+# How this was found, so the next person does not have to repeat it:
+#
+#   0x800B2D98 is the stage counter, a HALFWORD (accessed with lh/sh).
+#   The stage-advance routine reads it, and either starts a new run at 1 or
+#   increments it:
+#
+#     0x800130E0  lh    $v0, 0x2d98($v0)   ; current stage
+#     0x800130E8  bnez  $v0, 0x80013100    ; already playing -> advance
+#     0x800130F8  j     0x80013094
+#     0x800130FC  addiu $v0, $zero, 1      ; delay slot: FIRST stage = 1  <-- patched
+#     0x80013100  addiu $v0, $v1, 1        ; else stage = current + 1
+#     0x80013108  sh    $v0, 0x2d98($at)   ; store it back
+#
+#   Patching the immediate at 0x800130FC changes which stage a new game starts
+#   on. The guard covers the whole instruction (01 00 02 24 = addiu $v0,$zero,1)
+#   and the option owns only its low halfword, which is where the MIPS immediate
+#   lives - the same shape as the starting-lives example in
+#   psxrecomp/docs/MOD_PACKAGES.md.
+#
+#   Verified live before writing this: with the debug build's TCP server,
+#   `write_ram 0x800B2D98 = 3` then finishing a stage advanced the game to
+#   stage 4.
+
+format_version = 2
+id = "domino.stage-select"
+version = "1.0.0"
+name = "Stage Select"
+author = "DominoRecomp"
+description = "Start a new game on any stage instead of always the first."
+license = "MIT"
+resolver = "declarative"
+
+[[target]]
+game_id = "SLUS-00804"
+
+[[feature]]
+id = "stage-select"
+name = "Stage Select"
+description = "Begin a new game on the chosen stage. Progression continues normally from there."
+group = "Quality of Life"
+default_enabled = false
+
+[[option]]
+feature = "stage-select"
+id = "stage"
+label = "Starting stage"
+description = "Which stage a new game begins on, in the game's own order. 1 is the normal start."
+group = "Quality of Life"
+type = "integer"
+min = 1
+max = 6
+step = 1
+default = 1
+
+[[patch]]
+feature = "stage-select"
+target = "main_exe"
+address = 0x800130FC
+expected = "01 00 02 24"
+replace_from = { option = "stage", encoding = "u16le", offset = 0 }
