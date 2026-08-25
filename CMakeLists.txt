@@ -38,6 +38,15 @@ psxrecomp_add_game_runtime(psx-runtime
     CODEGEN_SETUP_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/codegen_setup.c"
 )
 
+# --- MSVC: the generated C needs a larger object format ------------------
+# Each generated/SLUS_008.04_full_NN.c is a machine-generated translation unit
+# with an enormous number of functions. MSVC's default COFF object caps at
+# 65,279 sections and fails with "fatal error C1128 ... compile with /bigobj".
+# Harmless everywhere else, so scope it to MSVC and apply to the whole target.
+if(MSVC)
+    target_compile_options(psx-runtime PRIVATE /bigobj)
+endif()
+
 # Stage runtime configs next to the exe for direct build/ launches. Only copy
 # files that exist — never fail POST_BUILD when game_options.toml is absent.
 foreach(_PSX_RUNTIME_CONFIG game.toml game_options.toml)
