@@ -40,6 +40,18 @@
 .PARAMETER Force
     Rebuild shards even when they already exist.
 
+.PARAMETER BuildDir
+    Where the captures live, relative to the repo root. Default build-release.
+    Use -BuildDir build-debug when you have been playing the debug build - its
+    captures are entirely separate, and pointing the tool at the wrong one
+    silently recompiles a stale set and produces no new shards.
+
+.PARAMETER OutDir
+    Cache root. Defaults to <BuildDir>\cache. Shards are namespaced by codegen
+    hash and game config, both identical across the release and debug builds,
+    so shards built from debug captures are valid for the release build too:
+    -BuildDir build-debug -OutDir build-release\cache is a legitimate combination.
+
 .PARAMETER Cps
     Pass --cps. Only correct if the runtime was built with PSX_CPS defined.
 
@@ -52,14 +64,16 @@ param(
     [int]$Jobs = 0,
     [switch]$LatestOnly,
     [switch]$Force,
-    [switch]$Cps
+    [switch]$Cps,
+    [string]$BuildDir = 'build-release',
+    [string]$OutDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $Root = Split-Path -Parent $PSScriptRoot
-$BuildDir = Join-Path $Root 'build-release'
+$buildPath = Join-Path $Root $BuildDir
 $log = Join-Path $Root 'overlay_cache.log'
 Remove-Item $log -ErrorAction SilentlyContinue
 
@@ -149,20 +163,23 @@ try {
     # Latest manifest first, then the additive history oldest-first so newer
     # snapshots win on any tie.
     $captureFiles = @()
-    $latest = Join-Path $BuildDir 'overlay_captures.json'
+    $latest = Join-Path $buildPath 'overlay_captures.json'
     if (Test-Path $latest) { $captureFiles += (Get-Item $latest) }
     if (-not $LatestOnly) {
-        $hist = Join-Path $BuildDir 'overlay_captures.json.d'
+        $hist = Join-Path $buildPath 'overlay_captures.json.d'
         if (Test-Path $hist) {
             $captureFiles += Get-ChildItem -Path $hist -Filter '*.json' | Sort-Object LastWriteTime
         }
     }
     if (-not $captureFiles) {
-        throw "No capture files under $BuildDir. Play the game with [runtime] overlay_cache = true, quit normally, then rerun."
+        throw "No capture files under $buildPath. Play the game with [runtime] overlay_cache = true, quit normally, then rerun."
     }
-    Dim "captures   : $($captureFiles.Count) file(s)"
+    $outDir = if ($OutDir) { Join-Path $Root $OutDir } else { Join-Path $buildPath 'cache' }
+    $newest = ($captureFiles | Sort-Object LastWriteTime -Descending | Select-Object -First 1)
+    Dim "build dir  : $buildPath"
+    Dim "captures   : $($captureFiles.Count) file(s), newest $($newest.LastWriteTime)"
+    Dim "cache out  : $outDir"
 
-    $outDir = Join-Path $BuildDir 'cache'
     $runtimeInclude = Join-Path $Root 'psxrecomp\runtime\include'
     $failed = 0
     $i = 0
