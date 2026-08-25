@@ -99,8 +99,9 @@ Equivalent by hand:
 ```powershell
 git submodule update --init --recursive
 python psxrecomp\psxrecomp_cli.py generate --config game.toml --project-root .
-cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64
-cmake --build build-release --config Release --target psx-runtime
+python psxrecomp\psxrecomp_cli.py ensure-toolchain --project-root .
+python psxrecomp\psxrecomp_cli.py rebuild --config game.toml --project-root . `
+  --build-dir build-release --target psx-runtime --exe-basename Domino_Recompiled --no-pgo
 ```
 
 `game.toml` points at the disc by **relative** path
