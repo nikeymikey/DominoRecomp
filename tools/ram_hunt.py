@@ -327,6 +327,41 @@ def cmd_trace(args):
         print(f"    {addr}: {len(pcs)} distinct PC(s) -> {', '.join(sorted(pcs)[:6])}")
 
 
+STAGE_COUNTER = 0x800B2D98   # halfword, 1-based, drives stage ADVANCING
+
+
+def cmd_stage(args):
+    """Read or set the stage counter that decides which stage comes NEXT.
+
+    This is the one behaviour the hunt actually established: the counter does
+    NOT choose which stage loads when a game starts, but finishing a stage
+    advances to counter+1. So setting it to N-1 and then completing the current
+    stage lands you on stage N.
+
+    Order matters: loading a save state restores RAM wholesale and wipes the
+    poke, so load the state FIRST, then set, then finish the stage.
+    """
+    d = Debug(port=args.port)
+    cur = d.read_words(STAGE_COUNTER, 1)[0] & 0xFFFF
+    if args.stage is None:
+        print(f"stage counter 0x{STAGE_COUNTER:08X} = {cur}"
+              f"   (finishing this stage would advance to {cur + 1})")
+        return
+
+    if not 2 <= args.stage <= 6:
+        sys.exit("stage must be 2..6 - you cannot 'advance' to stage 1 "
+                 "(a counter of 0 takes the first-stage branch instead)")
+    want = args.stage - 1
+    d.call("write_ram", addr=f"0x{STAGE_COUNTER:08X}", val=f"0x{want & 0xFF:02X}")
+    d.call("write_ram", addr=f"0x{STAGE_COUNTER + 1:08X}", val=f"0x{(want >> 8) & 0xFF:02X}")
+    back = d.read_words(STAGE_COUNTER, 1)[0] & 0xFFFF
+    print(f"counter {cur} -> {back}")
+    if back != want:
+        print(f"  WARNING: read back {back}, expected {want} - the write did not stick")
+        return
+    print(f"  finish the current stage and it should load stage {args.stage}")
+
+
 def cmd_ping(args):
     d = Debug(port=args.port)
     rsp = d.ping()
@@ -426,6 +461,12 @@ def main():
                         "then arm at once. Run this BEFORE launching the game to "
                         "catch writes that happen during startup.")
     t.set_defaults(func=cmd_trace)
+
+    g2 = sub.add_parser("stage", help="show or set the stage the next advance loads")
+    g2.add_argument("stage", nargs="?", type=int,
+                    help="stage 2-6 to land on after finishing the current one; "
+                         "omit to just show the counter")
+    g2.set_defaults(func=cmd_stage)
 
     n = sub.add_parser("ping", help="check the debug server is listening")
     n.set_defaults(func=cmd_ping)

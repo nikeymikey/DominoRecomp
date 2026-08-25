@@ -78,6 +78,18 @@ rough order of promise:
 4. The overlay at `0x800C7000` writes the counter; disassembling it from
    `overlay_captures.json` may reveal the master it copies from.
 
+## What the counter IS good for
+
+Advancing works, and that is enough to reach any stage for overlay-capture
+purposes. From a save state near the end of a stage:
+
+    python tools/ram_hunt.py stage 4     # counter := 3
+    # finish the stage -> loads stage 4
+
+`tools/ram_hunt.py stage N` sets the counter to N-1 and verifies the read-back.
+Load the save state FIRST: restoring a state rewrites RAM and discards the poke.
+N must be 2..6; a counter of 0 takes the first-stage branch instead.
+
 ## Cheap alternative
 
 F7 opens the runtime's save-state menu (slots 1-9, 0, -, =); F8 is rewind. A
