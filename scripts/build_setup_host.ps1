@@ -33,6 +33,10 @@
 .PARAMETER Clean
     Wipe the setup-host build directory first.
 
+.PARAMETER Bash
+    Use this bash instead of searching. MSYS2 is preferred automatically,
+    because Git for Windows bash cannot see MSYS2 pacman packages.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File scripts\build_setup_host.ps1
 #>
@@ -41,7 +45,8 @@ param(
     [string]$Artifact = 'windows-x64',
     [string]$BuildDir = 'build-setuphost',
     [switch]$SkipPackage,
-    [switch]$Clean
+    [switch]$Clean,
+    [string]$Bash = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -84,14 +89,36 @@ function Get-ToolchainBin {
     return $null
 }
 
-function Find-Bash {
-    if (Have 'bash') { return (Get-Command bash).Source }
-    foreach ($c in @("$env:ProgramFiles\Git\bin\bash.exe",
-                     "${env:ProgramFiles(x86)}\Git\bin\bash.exe",
-                     'C:\msys64\usr\bin\bash.exe')) {
-        if ($c -and (Test-Path $c)) { return $c }
+function Get-BashCandidates {
+    <#
+      MSYS2 FIRST, deliberately. Git for Windows also provides bash, but it is a
+      separate installation with its own /usr/bin and cannot see packages
+      installed by MSYS2's pacman - so `pacman -S zip rsync` leaves git-bash
+      exactly as it was. Whichever shell we pick has to be the one that owns the
+      tools.
+    #>
+    $c = @()
+    foreach ($p in @('C:\msys64\usr\bin\bash.exe',
+                     "$env:SystemDrive\msys64\usr\bin\bash.exe",
+                     "$env:ProgramFiles\Git\bin\bash.exe",
+                     "${env:ProgramFiles(x86)}\Git\bin\bash.exe")) {
+        if ($p -and (Test-Path $p)) { $c += (Resolve-Path $p).Path }
     }
-    return $null
+    if (Have 'bash') { $c += (Get-Command bash).Source }
+    return ($c | Select-Object -Unique)
+}
+
+function Test-BashTools {
+    <# Returns the tools MISSING from this particular bash. #>
+    param([string]$Bash, [string[]]$Tools)
+    $missing = @()
+    foreach ($t in $Tools) {
+        & $Bash -lc "command -v $t >/dev/null 2>&1"
+        if ($LASTEXITCODE -ne 0) { $missing += $t }
+    }
+    # Comma operator: an empty array would otherwise unroll to $null on return,
+    # and $null.Count throws under Set-StrictMode - on the SUCCESS path.
+    return ,$missing
 }
 
 Push-Location $Root
@@ -132,28 +159,44 @@ try {
     }
 
     Step 2 'Packaging the setup-host zip'
-    $bash = Find-Bash
-    $missing = @()
-    if (-not $bash) { $missing += 'bash' }
-    else {
-        foreach ($t in @('rsync', 'zip')) {
-            & $bash -lc "command -v $t >/dev/null 2>&1"
-            if ($LASTEXITCODE -ne 0) { $missing += $t }
-        }
-    }
 
-    if ($missing.Count -gt 0) {
-        Warn "The packager needs: $($missing -join ', ')"
-        Warn 'psxrecomp/tools/package_setup_host.sh is bash and uses rsync + zip.'
-        Warn 'Git for Windows ships neither. Easiest fix:'
-        Warn '    winget install MSYS2.MSYS2'
-        Warn '    C:\msys64\usr\bin\pacman -S --noconfirm zip rsync'
-        Warn 'then rerun this script. The build above is done and is not repeated.'
+    # cmake must be visible to the shell we hand off to.
+    if (($env:PATH -notlike "*$tc*")) { $env:PATH = "$tc;$env:PATH" }
+
+    $candidates = if ($Bash) { @($Bash) } else { Get-BashCandidates }
+    if (-not $candidates) {
+        Warn 'No bash found. Install MSYS2:  winget install MSYS2.MSYS2'
         Write-Host "`nSetup host built; zip not created." -ForegroundColor Yellow
         return
     }
 
-    Dim "bash      : $bash"
+    $bash = $null
+    $report = @()
+    foreach ($c in $candidates) {
+        $miss = Test-BashTools -Bash $c -Tools @('rsync', 'zip')
+        $report += [pscustomobject]@{ Path = $c; Missing = $miss }
+        if ($miss.Count -eq 0) { $bash = $c; break }
+    }
+
+    if (-not $bash) {
+        Warn 'The packager needs rsync and zip, and no available bash has both:'
+        foreach ($r in $report) {
+            Warn ("  {0}  ->  missing {1}" -f $r.Path, ($r.Missing -join ', '))
+        }
+        Warn ''
+        Warn 'Note that Git for Windows bash and MSYS2 bash are separate installs'
+        Warn 'with separate /usr/bin - pacman packages are invisible to git-bash.'
+        Warn 'Install into MSYS2 and this script will pick MSYS2 bash:'
+        Warn '    C:\msys64\usr\bin\pacman -S --noconfirm zip rsync'
+        Warn 'Or point at a specific shell:  -Bash C:\msys64\usr\bin\bash.exe'
+        Write-Host "`nSetup host built; zip not created." -ForegroundColor Yellow
+        return
+    }
+
+    foreach ($r in $report) {
+        if ($r.Path -eq $bash) { Dim "bash      : $($r.Path)  (rsync + zip present)" }
+        else { Dim "skipped   : $($r.Path)  (missing $($r.Missing -join ', '))" }
+    }
     $rc = Invoke-Logged $bash @('-lc',
         "cd '$($Root -replace '\\','/')' && scripts/package_setup_release.sh '$BuildDir' '$Artifact' psxrecomp/recompiler/build")
     if ($rc -ne 0) { throw "packaging failed ($rc) - see $log" }
