@@ -151,3 +151,7 @@ overlay_cache.log
 # RAM snapshots from tools/ram_hunt.py (large, machine-specific, disc-derived)
 /hunt/
 /build-debug/
+
+# Setup-host build log and release staging
+setup_host.log
+/build-setuphost/
