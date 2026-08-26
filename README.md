@@ -1,146 +1,152 @@
 # No One Can Stop Mr. Domino — Recompiled
 
-Static recompilation of **No One Can Stop Mr. Domino** (USA, `SLUS-00804`) built on
-[psxrecomp](https://github.com/mstan/psxrecomp) and
-[recomp-ui](https://github.com/mstan/recomp-ui).
-
-Static recompilation of No One Can Stop Mr. Domino (USA) via PSXRecomp
+A static recompilation of **No One Can Stop Mr. Domino** (USA, `SLUS-00804`),
+built on [psxrecomp](https://github.com/mstan/psxrecomp) and
+[recomp-ui](https://github.com/mstan/recomp-ui). The PS1 MIPS binary is
+translated to C and compiled as a native x64 executable — the game runs as real
+code, not under emulation.
 
 | | |
 |---|---|
-| Serial | SLUS-00804 |
-| Players | 2 |
+| Serial | `SLUS-00804` |
 | Region | NTSC-U |
-| Publisher | Acclaim Entertainment |
+| Publisher | Acclaim Entertainment (dev. ArtDink) |
 | Year | 1998 |
-
-Scaffolded with the New Project Layout. See
-`psxrecomp/docs/GAME_PROJECT_SETUP.md` for the full flow.
-
-## Status
-
-Boots, runs at correct speed, all six stages covered by the overlay cache.
-
-| | |
-|---|---|
-| Interpreted instructions/frame, no cache | 2,405 |
-| ...with 437 native overlay shards | **77** (-97%) |
-
-You supply your own legal disc; nothing derived from it is in this repository.
-Build with `scripts\build_windows.ps1`, then grow the overlay cache by playing
-and running `scripts\build_overlay_cache.ps1`. Notes on the incomplete stage
-select are in [`docs/stage-select-findings.md`](docs/stage-select-findings.md).
-
-<!-- retcomm-readme-launcher -->
-## RetComM Launcher
-
-You can run this title **standalone** (release zip + the built-in recomp-ui
-Generate & Build flow), or manage installs, updates, ROM/BIOS wiring, and queued
-builds more intuitively with
-**[RetComM Launcher](https://github.com/TechnicallyComputers/RetComM-Launcher)** —
-the Retro Compilation Manager hub for self-compiling recomps.
-
-[Downloads](https://github.com/TechnicallyComputers/RetComM-Launcher/releases) ·
-[Full README & features](https://github.com/TechnicallyComputers/RetComM-Launcher#readme)
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/TechnicallyComputers/RetComM-Launcher/main/docs/screenshots/hub-and-game-launcher.png" alt="RetComM hub with a background build, next to a title’s recomp-ui launcher" width="720">
-</p>
-
-<p align="center">
-  <img src="https://raw.githubusercontent.com/TechnicallyComputers/RetComM-Launcher/main/docs/screenshots/queue-and-background-build.png" alt="Background cmake build with titles queued" width="720">
-</p>
-
-RetComM checks for updates, rebuilds with existing build data when possible,
-shares the portable toolchain used by per-title launchers, and automates
-BIOS/ROM/save plumbing so you are not stuck repeating each game’s wizard by hand.
-<!-- /retcomm-readme-launcher -->
+| Framework | psxrecomp `v0.3.1-alpha-691` (pinned submodule) |
 
 ## Legal
 
-You must own the original game. Disc images under `disc/` are gitignored and
-must never be committed. Retail BIOS dumps are not redistributed; OpenBIOS is
-used for Generate unless you supply your own SCPH locally.
+**You must own the game.** This repository contains no disc image, no boot
+executable, no BIOS, and no recompiled game code — only configuration, build
+scripts and notes. Everything derived from the disc is produced on your machine
+from your own dump and is gitignored.
 
-Default app icon: `assets/psxrecomp.ico` (and `.png` / `.svg`) — RetComM-themed controller mark from `psxrecomp/assets/`. Windows builds embed it via `APP_ICON`.
+Retail BIOS dumps are not redistributed either; the build uses the bundled,
+MIT-licensed OpenBIOS unless you point it at your own `SCPH1001.BIN`.
 
-Optional box art under `launcher_assets/img/` may come from
-[libretro-thumbnails](https://github.com/libretro-thumbnails/libretro-thumbnails)
-(`Named_Boxarts`); see `BOXART_SOURCE.txt` when present.
+## Status
 
-## Quick start (Windows / MSVC)
+Boots, runs at the correct speed, and all six stages are covered by the native
+overlay cache.
 
-Prerequisites on `PATH`: **CMake 3.20+**, **Python 3**, **Git**, and ideally
-**Ninja** (`winget install Ninja-build.Ninja`) — the emitter build prefers it.
-Run from a **x64 Native Tools Command Prompt for VS 2022** so CMake finds MSVC.
+| Interpreted instructions per frame | |
+|---|---|
+| No overlay cache | 2,405 |
+| 437 native shards, all six stages | **77** (−97%) |
+
+PS1 games stream code overlays from disc that a static recompiler never sees at
+build time, so they fall back to an interpreter. Compiling captured overlays
+into native shards is what closes that gap; the remainder is mostly code the
+BIOS assembles in RAM at boot, which never existed on disc to begin with.
+
+## Requirements
+
+| | |
+|---|---|
+| CMake | 3.20+ |
+| Python | 3.x |
+| Git | with submodule support |
+| Ninja | recommended — the emitter build prefers it |
+| MSVC | for the emitters only (C++20) |
+| MinGW-w64 GCC | required for overlay shards — see the note below |
+
+The **runtime is built with clang**, not MSVC. psxrecomp's runtime sources use
+GNU C extensions — designated-initializer ranges (`[0 ... N] =`) in `sio.c`,
+`__attribute__` in `mdec.c` — which `cl.exe` cannot parse. The build script
+fetches the portable `cmake-clang-v1` toolchain automatically, so nothing extra
+is needed for that step.
+
+Overlay shards additionally need a **real MinGW-w64 GCC** ([WinLibs](https://winlibs.com/)
+is the easiest). Clang cannot build them: the generated overlay C defines
+`overlay_flush_cycles()` with `dllexport` after `psx_cycles.h` has declared it
+without, which GCC permits and clang rejects outright.
+
+## Build
+
+Clone with submodules, put your `.cue` where `game.toml` expects it (by default
+a sibling directory — adjust `[game] disc` or pass `-Disc`), then:
 
 ```powershell
-cd C:\psxrecomp_projects\DominoRecomp
 powershell -ExecutionPolicy Bypass -File scripts\build_windows.ps1
 ```
 
-That wrapper does submodule sync → `psxrecomp_cli.py generate` (which builds the
-emitters itself if they are missing) → `psxrecomp_cli.py rebuild`, and prints the
-path to `Domino_Recompiled.exe`.
-
-> **The runtime is built with clang, not MSVC.** psxrecomp's runtime sources use
-> GNU C extensions — designated-initializer ranges (`[0 ... N] =`) in `sio.c`,
-> `__attribute__` in `mdec.c` — which `cl.exe` cannot parse (C2059/C2143/C2146).
-> Step 3 therefore uses the portable **cmake-clang-v1** pack that the CLI fetches
-> automatically, the same toolchain upstream CI and RetComM use. MSVC is still
-> needed for step 2's emitter build (C++20, no GNU extensions).
-
-Useful flags:
+That syncs submodules, runs `psxrecomp_cli.py generate` to translate the disc
+into C, and configures and builds the runtime. The first run is long — it
+compiles roughly 300 MB of generated C. Output is
+`build-release\Domino_Recompiled.exe`.
 
 | Flag | Effect |
 |------|--------|
-| `-Bios C:\path\SCPH1001.BIN` | Generate the retail BIOS backend too (otherwise bundled OpenBIOS) |
+| `-Bios C:\path\SCPH1001.BIN` | Also generate the retail BIOS backend |
 | `-Disc C:\path\game.cue` | Override the disc path from `game.toml` |
-| `-Config RelWithDebInfo` | Optimized build with symbols (never use Debug) |
-| `-SkipGenerate` | Rebuild only, when `generated/` is already current |
-| `-KeepGoing 10` | Pass `-k 10` to Ninja so one run surfaces many errors |
-| `-Clean` | Wipe `build-release` first |
-| `-Msvc` | Force cl.exe (unsupported; expected to fail) |
+| `-Config RelWithDebInfo` | Optimized with symbols, and enables the TCP debug server |
+| `-BuildDir build-debug` | Build somewhere other than `build-release` |
+| `-SkipGenerate` | Rebuild only, when `generated\` is current |
+| `-Clean` | Wipe the build directory first |
+| `-KeepGoing 10` | Pass `-k 10` to Ninja to surface many errors in one run |
 
-Equivalent by hand:
+## Growing the overlay cache
+
+This is what takes the game from playable to fast. `game.toml` sets
+`[runtime] overlay_cache = true`, so every overlay the game streams is recorded
+to `overlay_captures.json` beside the exe while you play. Compiling those
+captures produces native shards that load automatically on the next launch.
 
 ```powershell
-git submodule update --init --recursive
-python psxrecomp\psxrecomp_cli.py generate --config game.toml --project-root .
-python psxrecomp\psxrecomp_cli.py ensure-toolchain --project-root .
-python psxrecomp\psxrecomp_cli.py rebuild --config game.toml --project-root . `
-  --build-dir build-release --target psx-runtime --exe-basename Domino_Recompiled --no-pgo
+# play, quit normally, then:
+powershell -ExecutionPolicy Bypass -File scripts\build_overlay_cache.ps1
 ```
 
-`game.toml` points at the disc by **relative** path
-(`..\No One Can Stop Mr. Domino (USA)\...cue`), so the dump stays outside this
-repo and is never committed.
+Repeat as you cover more of the game. Coverage accumulates: the runtime keeps
+an immutable history in `overlay_captures.json.d\`, and the script compiles
+every snapshot, so overlays that were long since overwritten in RAM are still
+included.
 
-## Quick start (dev)
+| Flag | Effect |
+|------|--------|
+| `-BuildDir build-debug` | Read captures from a different build |
+| `-OutDir build-release\cache` | Write shards somewhere else |
+| `-Gcc C:\mingw64\bin\gcc.exe` | Pick the shard compiler explicitly |
+| `-Force` | Rebuild shards that already exist |
 
-```bash
-git submodule update --init --recursive
-./psxrecomp/tools/ci/build_emitters.sh
-python3 psxrecomp/psxrecomp_cli.py generate \
-  --config game.toml --project-root . --disc disc/<your>.cue
-cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build-release --target psx-runtime
+**`overlay_captures.json` contains code read from your disc.** It is gitignored;
+keep it local and never attach it to a public issue.
+
+## Reaching every stage
+
+Shard coverage only grows for code you actually execute, so the cache is only as
+good as the ground you cover. `tools\ram_hunt.py` can warp between stages using
+the game's own stage-advance path:
+
+```powershell
+# load a save state near the end of a stage (F7), then:
+python tools\ram_hunt.py stage 4
+# finish the stage -> loads stage 4
 ```
 
-Zip prefix for CI artifacts: `domino`.
+This needs a `RelWithDebInfo` build, since only that carries the TCP debug
+server. The same tool snapshots and diffs RAM, traces writes with the guest PC
+that made them, and pokes memory — see `--help`.
 
-## Symbols
+The runtime also has save states (**F7**, slots `1`–`9`, `0`, `-`, `=`) and
+rewind (**F8**), which need no tooling at all.
 
-Progressive map: `symbols.toml` → `python3 tools/sync_symbols.py` →
-`psx_symbols.h` (`PSX_FN_*`). See `psxrecomp/docs/SYMBOLS.md`.
+## Notes
 
-## Framework pins
+- [`docs/stage-select-findings.md`](docs/stage-select-findings.md) — reverse
+  engineering of the stage counter: what it does, what it does not, and where a
+  proper stage select would have to look instead.
+- `symbols.toml` → `python tools\sync_symbols.py` → `psx_symbols.h` grows a
+  progressive symbol map. See `psxrecomp/docs/SYMBOLS.md`.
+- Submodule gitlinks are the authoritative framework pins;
+  `framework_pins.txt` is a human-readable snapshot. Bump them deliberately.
 
-Submodule gitlinks (`psxrecomp`, optional `recomp-ui`, nested `recomp-net`)
-are authoritative. `framework_pins.txt` is an optional scaffold snapshot;
-release CI logs SHAs with `record_pins.sh` but builds whatever the gitlinks
-resolve to. Bump submodules deliberately — do not float on `main`/`master`
-in release CI.
+## Credits
+
+Built on [psxrecomp](https://github.com/mstan/psxrecomp) by mstan. Titles using
+this framework can also be managed through
+[RetComM Launcher](https://github.com/TechnicallyComputers/RetComM-Launcher),
+which handles installs, updates and BIOS/ROM wiring across multiple recomps.
 
 <!-- retcomm-readme-raid -->
 ---
