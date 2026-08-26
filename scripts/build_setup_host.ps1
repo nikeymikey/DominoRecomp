@@ -108,6 +108,17 @@ function Get-BashCandidates {
     return ($c | Select-Object -Unique)
 }
 
+function ConvertTo-MsysPath {
+    <# C:\mingw64\bin -> /c/mingw64/bin #>
+    param([string]$Path)
+    if (-not $Path) { return '' }
+    $p = $Path -replace '\\', '/'
+    if ($p -match '^([A-Za-z]):(.*)$') {
+        return ('/' + $Matches[1].ToLower() + $Matches[2])
+    }
+    return $p
+}
+
 function Test-BashTools {
     <# Returns the tools MISSING from this particular bash. #>
     param([string]$Bash, [string[]]$Tools)
@@ -197,8 +208,29 @@ try {
         if ($r.Path -eq $bash) { Dim "bash      : $($r.Path)  (rsync + zip present)" }
         else { Dim "skipped   : $($r.Path)  (missing $($r.Missing -join ', '))" }
     }
-    $rc = Invoke-Logged $bash @('-lc',
-        "cd '$($Root -replace '\\','/')' && scripts/package_setup_release.sh '$BuildDir' '$Artifact' psxrecomp/recompiler/build")
+    # MSYS2's login shell does not inherit the Windows PATH, so tools installed
+    # outside MSYS2 are invisible to it. The packager needs:
+    #   objdump - bundle_mingw_dlls.sh uses it to resolve the exe's DLL imports
+    #             (it tries x86_64-w64-mingw32-objdump, then objdump)
+    #   cmake   - staging invokes it
+    # Both live outside MSYS2 here, so prepend their directories explicitly
+    # rather than depending on profile behaviour.
+    $extra = @()
+    if (Have 'gcc') {
+        $gccDir = Split-Path (Get-Command gcc).Source -Parent
+        $extra += (ConvertTo-MsysPath $gccDir)
+        Dim "mingw bin : $gccDir  (objdump)"
+    }
+    else {
+        Warn 'gcc not on PATH - objdump probably will not be found either.'
+    }
+    $extra += (ConvertTo-MsysPath $tc)
+    $prefix = ($extra | Where-Object { $_ } | Select-Object -Unique) -join ':'
+
+    $rootMsys = ConvertTo-MsysPath $Root
+    $cmd = "export PATH='$prefix':`$PATH; cd '$rootMsys' && " +
+           "scripts/package_setup_release.sh '$BuildDir' '$Artifact' psxrecomp/recompiler/build"
+    $rc = Invoke-Logged $bash @('-lc', $cmd)
     if ($rc -ne 0) { throw "packaging failed ($rc) - see $log" }
 
     $zip = Get-ChildItem -Path (Join-Path $Root 'dist') -Filter '*.zip' -ErrorAction SilentlyContinue |
